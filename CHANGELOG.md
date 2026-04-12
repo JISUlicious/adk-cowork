@@ -62,5 +62,6 @@ Verbs: `add`, `update`, `remove`, `rename`, `move`.
 - update packages/cowork-server/src/cowork_server/app.py — add GET /v1/projects/{project}/preview/{path} endpoint backed by PreviewCache
 - update packages/cowork-core/src/cowork_core/__init__.py — export PreviewResult, PreviewCache, preview_file
 - add tests/test_preview.py — M1.9 unit tests for all six preview types, cache, content hash (14 tests)
+- update packages/cowork-server/src/cowork_server/transport.py — upgrade event_to_frame to serialize tool_call, tool_result, and multi-part frames (was text-only)
 - add packages/cowork-core/src/cowork_core/skills/bundled/** — M1.8 seven MIT default skills (docx-basic, xlsx-basic, pdf-read, md, plot, research, email-draft)
 - update packages/cowork-core/pyproject.toml — add python-docx, openpyxl, pandas, pypdf, matplotlib, markdown-it-py, Pillow for skill sandbox
