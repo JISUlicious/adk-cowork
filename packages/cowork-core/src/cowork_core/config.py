@@ -13,7 +13,10 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
+
+load_dotenv()
 
 
 def _resolve_env(value: str) -> str:
@@ -23,7 +26,7 @@ def _resolve_env(value: str) -> str:
 
 
 class ModelConfig(BaseModel):
-    base_url: str = "http://localhost:8000/v1"
+    base_url: str = "http://localhost:18000/v1"
     api_key: str = "env:OPENAI_API_KEY"
     model: str = "Huihui-Qwen3.5-35B-A3B-Claude-4.6-Opus-abliterated-4bit"
 

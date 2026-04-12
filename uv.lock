@@ -408,6 +408,7 @@ dependencies = [
     { name = "httpx" },
     { name = "litellm" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
 
@@ -418,6 +419,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "litellm", specifier = ">=1.40" },
     { name = "pydantic", specifier = ">=2.8" },
+    { name = "python-dotenv", specifier = ">=1" },
     { name = "pyyaml", specifier = ">=6" },
 ]
 
@@ -446,6 +448,7 @@ dependencies = [
     { name = "cowork-cli" },
     { name = "cowork-core" },
     { name = "cowork-server" },
+    { name = "python-dotenv" },
 ]
 
 [package.dev-dependencies]
@@ -463,6 +466,7 @@ requires-dist = [
     { name = "cowork-cli", editable = "packages/cowork-cli" },
     { name = "cowork-core", editable = "packages/cowork-core" },
     { name = "cowork-server", editable = "packages/cowork-server" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
 ]
 
 [package.metadata.requires-dev]
