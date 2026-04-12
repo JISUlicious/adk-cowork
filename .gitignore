@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+
+# Node
+node_modules/
+*.log
+
+# Rust / Tauri
+target/
+src-tauri/target/
+
+# Cowork local state
+CoworkWorkspaces/
+*.eml
+.env
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,27 @@
+[project]
+name = "cowork-cli"
+version = "0.1.0"
+description = "Cowork developer CLI — spawns a local server and drives a chat session"
+requires-python = ">=3.12"
+dependencies = [
+    "cowork-core",
+    "cowork-server",
+    "typer>=0.12",
+    "rich>=13",
+    "httpx>=0.27",
+    "websockets>=13",
+]
+
+[project.scripts]
+cowork = "cowork_cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cowork_cli"]
+
+[tool.uv.sources]
+cowork-core = { workspace = true }
+cowork-server = { workspace = true }
