@@ -65,6 +65,9 @@ Columns: **Path** · **Description** · **Core symbol**
 | `packages/cowork-core/src/cowork_core/skills/bundled/plot/SKILL.md` | Default skill: charts/plots to PNG via matplotlib Agg | — |
 | `packages/cowork-core/src/cowork_core/skills/bundled/research/SKILL.md` | Default skill: web research loop with search_web + http_fetch | — |
 | `packages/cowork-core/src/cowork_core/skills/bundled/email-draft/SKILL.md` | Default skill: compose .eml drafts with attachments via email.mime | — |
+| `packages/cowork-core/src/cowork_core/preview/__init__.py` | Preview subpackage exports | `PreviewResult`, `preview_file` |
+| `packages/cowork-core/src/cowork_core/preview/converters.py` | File→preview converters: md→HTML, docx→JSON, pdf→JSON, xlsx→JSON, csv→JSON, images→passthrough | `preview_file`, `PreviewResult` |
+| `packages/cowork-core/src/cowork_core/preview/cache.py` | Content-hash-based preview cache under workspace root | `PreviewCache` |
 | `packages/cowork-core/src/cowork_core/workspace/__init__.py` | Workspace subpackage exports | `Workspace`, `ProjectRegistry` |
 | `packages/cowork-core/src/cowork_core/workspace/project.py` | Project/Session dataclasses and `ProjectRegistry` (create/list/new_session/promote) on top of Workspace | `ProjectRegistry` |
 | `packages/cowork-core/src/cowork_core/workspace/workspace.py` | Filesystem sandbox rooted at one directory; traversal rejection | `Workspace` |
@@ -101,3 +104,4 @@ Columns: **Path** · **Description** · **Core symbol**
 | `tests/test_python_exec.py` | M1.5 tests for python_exec.run: cwd, exit code, timeout, network off, cleanup | — |
 | `tests/test_http_and_search.py` | M1.6 tests for http.fetch and search.web (with MockTransport and monkeypatched provider) | — |
 | `tests/test_skills.py` | M1.7 tests for SkillRegistry, SKILL.md parsing, injection snippet, load_skill tool | — |
+| `tests/test_preview.py` | M1.9 tests for preview converters (md/docx/pdf/xlsx/csv/image), cache, content hash | — |

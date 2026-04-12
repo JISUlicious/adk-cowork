@@ -58,5 +58,9 @@ Verbs: `add`, `update`, `remove`, `rename`, `move`.
 - update packages/cowork-server/src/cowork_server/__main__.py — load config via CoworkConfig.from_env for env-driven local model setup
 - update packages/cowork-core/src/cowork_core/runner.py — three-tier skill scan: bundled (package) → global (workspace) → project (per session)
 - update packages/cowork-core/src/cowork_core/runner.py — adopt opencode-style multi-level skill dirs: bundled → ~/.config/cowork/skills/ (user) → {workspace}/.cowork/skills/ (project)
+- add packages/cowork-core/src/cowork_core/preview/** — M1.9 preview converters (md→HTML, docx→JSON, pdf→JSON, xlsx→JSON, csv→JSON, images→passthrough) with content-hash cache
+- update packages/cowork-server/src/cowork_server/app.py — add GET /v1/projects/{project}/preview/{path} endpoint backed by PreviewCache
+- update packages/cowork-core/src/cowork_core/__init__.py — export PreviewResult, PreviewCache, preview_file
+- add tests/test_preview.py — M1.9 unit tests for all six preview types, cache, content hash (14 tests)
 - add packages/cowork-core/src/cowork_core/skills/bundled/** — M1.8 seven MIT default skills (docx-basic, xlsx-basic, pdf-read, md, plot, research, email-draft)
 - update packages/cowork-core/pyproject.toml — add python-docx, openpyxl, pandas, pypdf, matplotlib, markdown-it-py, Pillow for skill sandbox

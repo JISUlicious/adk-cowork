@@ -10,8 +10,9 @@ import asyncio
 import json
 from typing import Any
 
-from cowork_core import CoworkConfig, CoworkRuntime, build_runtime
+from cowork_core import CoworkConfig, CoworkRuntime, PreviewCache, build_runtime
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 from google.genai import types as genai_types
 
 from cowork_server.auth import TokenGuard, generate_token
@@ -24,6 +25,9 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     guard = TokenGuard(token)
     runtime: CoworkRuntime = build_runtime(cfg)
 
+    cache_dir = runtime.workspace.root / "global" / ".preview-cache"
+    preview_cache = PreviewCache(cache_dir)
+
     queues: dict[str, asyncio.Queue[str]] = {}
     tasks: set[asyncio.Task[None]] = set()
 
@@ -33,6 +37,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     app.state.cfg = cfg
     app.state.queues = queues
     app.state.tasks = tasks
+    app.state.preview_cache = preview_cache
 
     @app.get("/v1/health")
     async def health() -> dict[str, Any]:
@@ -82,6 +87,26 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 await ws.send_text(frame)
         except WebSocketDisconnect:
             return
+
+    @app.get("/v1/projects/{project}/preview/{path:path}", dependencies=[Depends(guard)])
+    async def preview_file(project: str, path: str) -> Response:
+        try:
+            full_path = runtime.workspace.resolve(f"projects/{project}/{path}")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not full_path.is_file():
+            raise HTTPException(status_code=404, detail=f"file not found: {path}")
+        try:
+            result = preview_cache.get(full_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=result.body,
+            media_type=result.content_type,
+            headers={"X-Content-Hash": result.content_hash},
+        )
 
     return app
 
