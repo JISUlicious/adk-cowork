@@ -14,14 +14,15 @@ from google.adk.models.lite_llm import LiteLlm
 
 from cowork_core.config import ModelConfig
 
+_DUMMY_KEY = "cowork-local"
+
 
 def build_model(cfg: ModelConfig) -> LiteLlm:
-    key = cfg.resolved_api_key
-    # LiteLLM reads OPENAI_API_KEY from the environment even when api_key is
-    # passed explicitly. Set it so local endpoints that don't need a real key
-    # (LM Studio, Ollama) don't trigger an "OPENAI_API_KEY required" error.
-    if key and not os.environ.get("OPENAI_API_KEY"):
-        os.environ["OPENAI_API_KEY"] = key
+    key = cfg.resolved_api_key or _DUMMY_KEY
+    # LiteLLM validates OPENAI_API_KEY from the environment regardless of the
+    # api_key kwarg. Always ensure it's set so local endpoints (LM Studio,
+    # Ollama) that don't need a real key work out of the box.
+    os.environ.setdefault("OPENAI_API_KEY", key)
     return LiteLlm(
         model=f"openai/{cfg.model}",
         api_base=cfg.base_url,
