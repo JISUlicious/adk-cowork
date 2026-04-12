@@ -57,5 +57,6 @@ Verbs: `add`, `update`, `remove`, `rename`, `move`.
 - update packages/cowork-server/src/cowork_server/app.py — use CoworkRuntime; create_session bootstraps project/session and injects CoworkToolContext
 - update packages/cowork-server/src/cowork_server/__main__.py — load config via CoworkConfig.from_env for env-driven local model setup
 - update packages/cowork-core/src/cowork_core/runner.py — three-tier skill scan: bundled (package) → global (workspace) → project (per session)
+- update packages/cowork-core/src/cowork_core/runner.py — adopt opencode-style multi-level skill dirs: bundled → ~/.config/cowork/skills/ (user) → {workspace}/.cowork/skills/ (project)
 - add packages/cowork-core/src/cowork_core/skills/bundled/** — M1.8 seven MIT default skills (docx-basic, xlsx-basic, pdf-read, md, plot, research, email-draft)
 - update packages/cowork-core/pyproject.toml — add python-docx, openpyxl, pandas, pypdf, matplotlib, markdown-it-py, Pillow for skill sandbox

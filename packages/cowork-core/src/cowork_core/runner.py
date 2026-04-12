@@ -57,9 +57,10 @@ class CoworkRuntime:
         session = self.projects.new_session(project.slug)
 
         # Per-session skill registry: starts from the runtime-wide registry
-        # (bundled + global) then layers project-scoped skills on top.
+        # (bundled + user-global) then layers workspace-local skills on top.
+        # Workspace-local: {workspace_root}/.cowork/skills/
         session_skills = SkillRegistry(_skills=dict(self.skills._skills))
-        session_skills.scan(project.skills_dir)
+        session_skills.scan(self.workspace.root / ".cowork" / "skills")
 
         ctx = CoworkToolContext(
             workspace=self.workspace,
@@ -85,14 +86,21 @@ def _bundled_skills_dir() -> Path:
     return Path(__file__).parent / "skills" / "bundled"
 
 
+def _user_config_dir() -> Path:
+    """``~/.config/cowork`` (XDG-style user config root)."""
+    return Path.home() / ".config" / "cowork"
+
+
 def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     workspace = Workspace(root=cfg.workspace.root)
     projects = ProjectRegistry(workspace=workspace)
     skills = SkillRegistry()
-    # Scan order: bundled (package default) → global (user workspace) → project (per session)
-    # Later scans shadow earlier ones by name, so user can override bundled skills.
+    # Scan order (later shadows earlier by name):
+    #   1. bundled  — shipped with cowork-core package
+    #   2. user     — ~/.config/cowork/skills/
+    #   3. project  — {cwd}/.cowork/skills/  (per open_session below)
     skills.scan(_bundled_skills_dir())
-    skills.scan(Path(cfg.workspace.root) / "global" / "skills")
+    skills.scan(_user_config_dir() / "skills")
 
     tool_registry = ToolRegistry()
     register_fs_tools(tool_registry)
