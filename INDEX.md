@@ -58,6 +58,13 @@ Columns: **Path** · **Description** · **Core symbol**
 | `packages/cowork-core/src/cowork_core/skills/__init__.py` | Skill subpackage exports | `SkillRegistry`, `load_skill` |
 | `packages/cowork-core/src/cowork_core/skills/loader.py` | SKILL.md frontmatter parser + `SkillRegistry` (scan, lookup, injection snippet) | `SkillRegistry` |
 | `packages/cowork-core/src/cowork_core/skills/load_skill_tool.py` | `load_skill` tool — fetches body + manifest for a named skill | `load_skill` |
+| `packages/cowork-core/src/cowork_core/skills/bundled/docx-basic/SKILL.md` | Default skill: read/create/edit .docx via python-docx | — |
+| `packages/cowork-core/src/cowork_core/skills/bundled/xlsx-basic/SKILL.md` | Default skill: read/create/edit .xlsx via openpyxl + pandas | — |
+| `packages/cowork-core/src/cowork_core/skills/bundled/pdf-read/SKILL.md` | Default skill: extract text/metadata from PDF via pypdf | — |
+| `packages/cowork-core/src/cowork_core/skills/bundled/md/SKILL.md` | Default skill: read/write/render Markdown via markdown-it-py | — |
+| `packages/cowork-core/src/cowork_core/skills/bundled/plot/SKILL.md` | Default skill: charts/plots to PNG via matplotlib Agg | — |
+| `packages/cowork-core/src/cowork_core/skills/bundled/research/SKILL.md` | Default skill: web research loop with search_web + http_fetch | — |
+| `packages/cowork-core/src/cowork_core/skills/bundled/email-draft/SKILL.md` | Default skill: compose .eml drafts with attachments via email.mime | — |
 | `packages/cowork-core/src/cowork_core/workspace/__init__.py` | Workspace subpackage exports | `Workspace`, `ProjectRegistry` |
 | `packages/cowork-core/src/cowork_core/workspace/project.py` | Project/Session dataclasses and `ProjectRegistry` (create/list/new_session/promote) on top of Workspace | `ProjectRegistry` |
 | `packages/cowork-core/src/cowork_core/workspace/workspace.py` | Filesystem sandbox rooted at one directory; traversal rejection | `Workspace` |

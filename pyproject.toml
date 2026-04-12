@@ -7,6 +7,7 @@ dependencies = [
     "cowork-core",
     "cowork-server",
     "cowork-cli",
+    "python-dotenv>=1.2.2",
 ]
 
 [dependency-groups]

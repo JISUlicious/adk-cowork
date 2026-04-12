@@ -56,13 +56,18 @@ class CoworkRuntime:
         project = self.projects.get_or_create(project_name or DEFAULT_PROJECT_NAME)
         session = self.projects.new_session(project.slug)
 
+        # Per-session skill registry: starts from the runtime-wide registry
+        # (bundled + global) then layers project-scoped skills on top.
+        session_skills = SkillRegistry(_skills=dict(self.skills._skills))
+        session_skills.scan(project.skills_dir)
+
         ctx = CoworkToolContext(
             workspace=self.workspace,
             registry=self.projects,
             project=project,
             session=session,
             config=self.cfg,
-            skills=self.skills,
+            skills=session_skills,
         )
         state: dict[str, Any] = {COWORK_CONTEXT_KEY: ctx}
         adk_sid = adk_session_id or session.id
@@ -75,10 +80,18 @@ class CoworkRuntime:
         return project, session, adk_sid
 
 
+def _bundled_skills_dir() -> Path:
+    """Path to default skills shipped inside the cowork-core package."""
+    return Path(__file__).parent / "skills" / "bundled"
+
+
 def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     workspace = Workspace(root=cfg.workspace.root)
     projects = ProjectRegistry(workspace=workspace)
     skills = SkillRegistry()
+    # Scan order: bundled (package default) → global (user workspace) → project (per session)
+    # Later scans shadow earlier ones by name, so user can override bundled skills.
+    skills.scan(_bundled_skills_dir())
     skills.scan(Path(cfg.workspace.root) / "global" / "skills")
 
     tool_registry = ToolRegistry()
