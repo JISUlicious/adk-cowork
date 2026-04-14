@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from google.adk.tools.tool_context import ToolContext
 
-from cowork_core.tools.base import get_cowork_context
+from cowork_core.tools.base import get_cowork_context, was_read
 from cowork_core.tools.fs._paths import resolve_project_path
 
 
@@ -32,6 +32,8 @@ def fs_edit(
     """
     if old == new:
         return {"error": "old and new are identical"}
+    if not was_read(tool_context, path):
+        return {"error": f"must read {path} before editing (call fs_read first)"}
     ctx = get_cowork_context(tool_context)
     abspath = resolve_project_path(ctx, path)
     if not abspath.is_file():

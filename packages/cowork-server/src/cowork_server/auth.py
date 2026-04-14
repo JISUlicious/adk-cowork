@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Query
 
 
 def generate_token() -> str:
@@ -16,11 +16,21 @@ def generate_token() -> str:
 
 
 class TokenGuard:
-    """FastAPI dependency that validates the ``x-cowork-token`` header."""
+    """FastAPI dependency that validates the ``x-cowork-token`` header.
+
+    Also accepts the token via a ``?token=`` query param as a fallback for
+    browser contexts (``<img>``, ``<iframe>``, WebSocket upgrades) that can't
+    attach custom headers.
+    """
 
     def __init__(self, token: str) -> None:
         self._token = token
 
-    def __call__(self, x_cowork_token: str = Header(default="")) -> None:
-        if not secrets.compare_digest(x_cowork_token, self._token):
+    def __call__(
+        self,
+        x_cowork_token: str = Header(default=""),
+        token: str = Query(default=""),
+    ) -> None:
+        provided = x_cowork_token or token
+        if not secrets.compare_digest(provided, self._token):
             raise HTTPException(status_code=401, detail="invalid token")

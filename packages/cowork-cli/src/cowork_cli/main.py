@@ -95,5 +95,53 @@ async def _chat(server_url: str, token: str) -> None:
                 if kind == "error":
                     console.print(f"[red]{frame.get('message')}[/red]")
                     break
-                if kind == "text" and frame.get("text"):
-                    console.print(frame["text"], end="")
+                if kind == "multi":
+                    for sub in frame.get("frames", []):
+                        _render_frame(sub)
+                else:
+                    _render_frame(frame)
+
+
+def _render_frame(frame: dict[str, Any]) -> None:
+    kind = frame.get("type")
+    if kind == "text" and frame.get("text"):
+        console.print(frame["text"], end="")
+    elif kind == "tool_call":
+        name = frame.get("name", "?")
+        args = frame.get("args") or {}
+        console.print(f"\n[bold cyan]▶ {name}[/bold cyan]")
+        for key, val in args.items():
+            rendered = _truncate(val, 200)
+            console.print(f"  [dim]{key}:[/dim] {rendered}")
+    elif kind == "tool_result":
+        name = frame.get("name", "?")
+        result = frame.get("result") or {}
+        if isinstance(result, dict) and result.get("confirmation_required"):
+            console.print(
+                f"  [yellow]⚠ {name}: {result.get('summary', 'confirmation needed')}[/yellow]"
+            )
+        elif isinstance(result, dict) and result.get("error"):
+            console.print(f"  [red]✗ {name}: {result['error']}[/red]")
+        else:
+            summary = _result_summary(name, result)
+            console.print(f"  [green]✓ {name}[/green]{summary}")
+
+
+def _truncate(val: Any, limit: int) -> str:
+    s = str(val)
+    if len(s) <= limit:
+        return s
+    return s[:limit] + "…"
+
+
+def _result_summary(name: str, result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    # Show a short preview for read-like results
+    content = result.get("content") or result.get("text") or result.get("output")
+    if content and isinstance(content, str):
+        preview = content.replace("\n", "↵ ")
+        if len(preview) > 120:
+            preview = preview[:120] + "…"
+        return f" [dim]→ {preview}[/dim]"
+    return ""

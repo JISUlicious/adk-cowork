@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from google.adk.tools.tool_context import ToolContext
 
-from cowork_core.tools.base import get_cowork_context
+from cowork_core.tools.base import get_cowork_context, record_read
 from cowork_core.tools.fs._paths import resolve_project_path
 
 _MAX_BYTES = 2_000_000
@@ -27,6 +27,7 @@ def fs_read(path: str, tool_context: ToolContext) -> dict[str, object]:
     truncated = len(data) > _MAX_BYTES
     if truncated:
         data = data[:_MAX_BYTES]
+    record_read(tool_context, path)
     return {
         "path": path,
         "content": data.decode("utf-8", errors="replace"),

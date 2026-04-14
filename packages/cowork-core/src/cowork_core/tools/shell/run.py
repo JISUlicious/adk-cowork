@@ -60,9 +60,10 @@ def shell_run(
     allowlist = ctx.config.policy.shell_allowlist
     if argv[0] not in allowlist:
         return {
-            "error": (
-                f"executable not in shell_allowlist: {argv[0]!r}. allowed: {sorted(allowlist)}"
-            )
+            "confirmation_required": True,
+            "tool": "shell_run",
+            "summary": f"Run `{' '.join(argv)}` (not in allowlist: {sorted(allowlist)})",
+            "argv": argv,
         }
     timeout_sec = max(1, min(int(timeout_sec), 600))
 

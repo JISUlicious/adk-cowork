@@ -1,0 +1,82 @@
+name: release
+
+# Builds the Cowork desktop app per OS on tag push and attaches installers
+# to a draft GitHub Release. v0.1 ships unsigned — users download the
+# installer manually. tauri-plugin-updater wiring (signed latest.json) is
+# tracked as a post-v0.1 follow-up.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            bundle: dmg
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            bundle: deb,appimage
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bundle: msi,nsis
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: cowork
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Linux system deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf
+
+      - name: Sync Python workspace
+        run: uv sync --all-packages
+
+      - name: Bundle embedded Python
+        run: uv run python scripts/bundle_python.py --target ${{ matrix.triple }}
+
+      - name: Install cowork-app npm deps
+        working-directory: cowork/packages/cowork-app
+        run: npm ci
+
+      - name: Install cowork-web npm deps
+        working-directory: cowork/packages/cowork-web
+        run: npm ci
+
+      - name: Build Tauri bundle
+        working-directory: cowork/packages/cowork-app
+        env:
+          TAURI_BUNDLE_TARGETS: ${{ matrix.bundle }}
+        run: npx tauri build --bundles ${{ matrix.bundle }}
+
+      - name: Upload installers
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.dmg
+            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.deb
+            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.AppImage
+            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.msi
+            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

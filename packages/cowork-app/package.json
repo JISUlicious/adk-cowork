@@ -1,0 +1,15 @@
+{
+  "name": "cowork-app",
+  "version": "0.1.0",
+  "description": "Cowork desktop shell (Tauri v2)",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1"
+  }
+}

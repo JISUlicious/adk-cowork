@@ -41,6 +41,34 @@ def test_server_app_factory() -> None:
     paths = {getattr(r, "path", None) for r in app.routes}
     assert "/v1/health" in paths
     assert "/v1/sessions" in paths
+    assert "/v1/projects/{project}/upload" in paths
+
+
+def test_upload_endpoint_writes_file(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    app = create_app(cfg, token="t")
+    client = TestClient(app)
+
+    # Project must exist before upload.
+    r = client.post(
+        "/v1/projects", headers={"x-cowork-token": "t"}, json={"name": "Drop Test"}
+    )
+    slug = r.json()["slug"]
+
+    r = client.post(
+        f"/v1/projects/{slug}/upload",
+        headers={"x-cowork-token": "t"},
+        files={"file": ("hello.txt", b"hi there", "text/plain")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["size"] == len(b"hi there")
+    written = tmp_path / "projects" / slug / "files" / "hello.txt"
+    assert written.read_bytes() == b"hi there"
 
 
 def test_cli_importable() -> None:

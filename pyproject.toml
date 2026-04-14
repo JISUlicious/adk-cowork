@@ -25,6 +25,7 @@ package = false
 
 [tool.uv.workspace]
 members = ["packages/*"]
+exclude = ["packages/cowork-web", "packages/cowork-app"]
 
 [tool.uv.sources]
 cowork-core = { workspace = true }
@@ -34,6 +35,11 @@ cowork-cli = { workspace = true }
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = [
+    "packages/cowork-app",
+    "packages/cowork-web",
+    ".cache",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
@@ -51,6 +57,7 @@ no_implicit_optional = true
 check_untyped_defs = true
 explicit_package_bases = true
 mypy_path = "packages/cowork-core/src:packages/cowork-server/src:packages/cowork-cli/src"
+exclude = "packages/cowork-app|packages/cowork-web|\\.cache"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

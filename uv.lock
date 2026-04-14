@@ -516,6 +516,7 @@ source = { editable = "packages/cowork-server" }
 dependencies = [
     { name = "cowork-core" },
     { name = "fastapi" },
+    { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -523,6 +524,7 @@ dependencies = [
 requires-dist = [
     { name = "cowork-core", editable = "packages/cowork-core" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

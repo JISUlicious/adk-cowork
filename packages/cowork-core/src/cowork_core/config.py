@@ -50,6 +50,31 @@ class PolicyConfig(BaseModel):
     email_send: Literal["confirm", "deny"] = "confirm"
 
 
+class McpServerConfig(BaseModel):
+    """Configuration for a single MCP server."""
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+
+
+class EmailConfig(BaseModel):
+    """SMTP settings for sending email via ``email_send``."""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = "env:COWORK_SMTP_PASSWORD"
+    use_tls: bool = True
+    default_from: str = ""
+
+    @property
+    def resolved_password(self) -> str:
+        return _resolve_env(self.smtp_password)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.smtp_host and self.default_from)
+
+
 class SearchConfig(BaseModel):
     provider: Literal["duckduckgo", "brave", "tavily", "searxng"] = "duckduckgo"
 
@@ -59,7 +84,9 @@ class CoworkConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> CoworkConfig:
@@ -75,18 +102,41 @@ class CoworkConfig(BaseModel):
         return cls().apply_env_overrides()
 
     def apply_env_overrides(self) -> CoworkConfig:
+        updates: dict[str, object] = {}
+
+        # Model
         model = self.model
         base = os.environ.get("COWORK_MODEL_BASE_URL")
         name = os.environ.get("COWORK_MODEL_NAME")
         key = os.environ.get("COWORK_MODEL_API_KEY")
         if base or name or key:
-            model = ModelConfig(
+            updates["model"] = ModelConfig(
                 base_url=base or model.base_url,
                 model=name or model.model,
                 api_key=key or model.api_key,
             )
-        workspace = self.workspace
+
+        # Workspace
         ws_root = os.environ.get("COWORK_WORKSPACE_ROOT")
         if ws_root:
-            workspace = WorkspaceConfig(root=Path(ws_root))
-        return self.model_copy(update={"model": model, "workspace": workspace})
+            updates["workspace"] = WorkspaceConfig(root=Path(ws_root))
+
+        # Email (SMTP)
+        email = self.email
+        smtp_host = os.environ.get("COWORK_SMTP_HOST")
+        smtp_port = os.environ.get("COWORK_SMTP_PORT")
+        smtp_user = os.environ.get("COWORK_SMTP_USER")
+        smtp_pass = os.environ.get("COWORK_SMTP_PASSWORD")
+        smtp_tls = os.environ.get("COWORK_SMTP_TLS")
+        email_from = os.environ.get("COWORK_EMAIL_FROM")
+        if any((smtp_host, smtp_port, smtp_user, smtp_pass, smtp_tls, email_from)):
+            updates["email"] = EmailConfig(
+                smtp_host=smtp_host or email.smtp_host,
+                smtp_port=int(smtp_port) if smtp_port else email.smtp_port,
+                smtp_user=smtp_user or email.smtp_user,
+                smtp_password=smtp_pass or email.smtp_password,
+                use_tls=smtp_tls.lower() not in ("0", "false", "no") if smtp_tls else email.use_tls,
+                default_from=email_from or email.default_from,
+            )
+
+        return self.model_copy(update=updates)

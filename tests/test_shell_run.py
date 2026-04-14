@@ -43,10 +43,10 @@ def test_rejects_empty_argv(tctx: MagicMock) -> None:
     assert "error" in shell_run([], tctx)
 
 
-def test_rejects_non_allowlisted(tctx: MagicMock) -> None:
+def test_non_allowlisted_returns_confirmation(tctx: MagicMock) -> None:
     out = shell_run(["/bin/ls"], tctx)
-    assert "error" in out
-    assert "shell_allowlist" in str(out["error"])
+    assert out.get("confirmation_required") is True
+    assert "allowlist" in str(out.get("summary", ""))
 
 
 def test_runs_python_version(tctx: MagicMock) -> None:

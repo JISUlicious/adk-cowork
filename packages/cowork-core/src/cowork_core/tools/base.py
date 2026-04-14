@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from cowork_core.skills.loader import SkillRegistry
 
 COWORK_CONTEXT_KEY = "cowork.tool_context"
+COWORK_READS_KEY = "cowork.session_reads"
 
 
 @dataclass(frozen=True)
@@ -42,3 +43,17 @@ def get_cowork_context(tool_context: ToolContext) -> CoworkToolContext:
     if not isinstance(ctx, CoworkToolContext):
         raise TypeError(f"expected CoworkToolContext, got {type(ctx).__name__}")
     return ctx
+
+
+def record_read(tool_context: ToolContext, path: str) -> None:
+    """Mark a project-relative path as read in this session."""
+    reads: set[str] = tool_context.state.setdefault(COWORK_READS_KEY, set())
+    reads.add(path)
+
+
+def was_read(tool_context: ToolContext, path: str) -> bool:
+    """Check whether a project-relative path has been read in this session."""
+    reads = tool_context.state.get(COWORK_READS_KEY)
+    if not isinstance(reads, set):
+        return False
+    return path in reads

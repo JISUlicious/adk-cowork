@@ -89,6 +89,7 @@ def test_glob(tctx: MagicMock) -> None:
 
 def test_edit_unique_match(tctx: MagicMock) -> None:
     fs_write("scratch/e.md", "alpha beta gamma", tctx)
+    fs_read("scratch/e.md", tctx)  # must read before editing
     out = fs_edit("scratch/e.md", "beta", "BETA", tctx)
     assert "error" not in out
     assert fs_read("scratch/e.md", tctx)["content"] == "alpha BETA gamma"
@@ -96,17 +97,27 @@ def test_edit_unique_match(tctx: MagicMock) -> None:
 
 def test_edit_rejects_no_match(tctx: MagicMock) -> None:
     fs_write("scratch/e.md", "alpha", tctx)
+    fs_read("scratch/e.md", tctx)
     assert "error" in fs_edit("scratch/e.md", "zeta", "ZETA", tctx)
 
 
 def test_edit_rejects_multi_match(tctx: MagicMock) -> None:
     fs_write("scratch/e.md", "x x x", tctx)
+    fs_read("scratch/e.md", tctx)
     assert "error" in fs_edit("scratch/e.md", "x", "Y", tctx)
 
 
 def test_edit_rejects_identical(tctx: MagicMock) -> None:
     fs_write("scratch/e.md", "hi", tctx)
+    fs_read("scratch/e.md", tctx)
     assert "error" in fs_edit("scratch/e.md", "hi", "hi", tctx)
+
+
+def test_edit_rejects_unread_file(tctx: MagicMock) -> None:
+    fs_write("scratch/e.md", "hello", tctx)
+    out = fs_edit("scratch/e.md", "hello", "world", tctx)
+    assert "error" in out
+    assert "must read" in out["error"]  # type: ignore[operator]
 
 
 def test_promote_moves_to_files(tctx: MagicMock) -> None:

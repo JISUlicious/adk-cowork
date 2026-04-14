@@ -20,6 +20,58 @@ uv run cowork
 
 That's it. Cowork spawns a local server, creates a session, and drops you into a chat loop. Type `exit` to quit.
 
+## Running the web UI (browser)
+
+The React UI under `packages/cowork-web` talks to the same FastAPI server as the CLI.
+
+```bash
+# Terminal 1: start the server (prints COWORK_READY host=... port=... token=...)
+uv run python -m cowork_server
+
+# Terminal 2: start Vite. It proxies /v1 to the server on port 8765 by default.
+cd packages/cowork-web
+npm install
+npm run dev
+```
+
+Open the printed Vite URL (usually `http://localhost:5173`). On first load the UI
+uses the token from `VITE_COWORK_TOKEN` or a `?token=` query param.
+
+## Running the desktop app (Tauri)
+
+The desktop app under `packages/cowork-app` bundles an embedded CPython and the
+Cowork server, so end users don't need `uv` or Python installed.
+
+For day-to-day development against the **system** Python (faster iteration):
+
+```bash
+cd packages/cowork-app
+npm install
+npm run dev        # launches Tauri dev window with hot-reload
+```
+
+For a **production** build with embedded Python (what release CI does):
+
+```bash
+# 1. Download python-build-standalone for your triple and pip-install cowork
+#    packages into it. Writes to packages/cowork-app/src-tauri/resources/python/.
+uv run python scripts/bundle_python.py --target aarch64-apple-darwin
+
+# 2. Build the installer. Output lands in src-tauri/target/release/bundle/.
+cd packages/cowork-app
+npm install
+npx tauri build
+```
+
+Supported triples: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.
+
+## Release QA
+
+Installers are built by `.github/workflows/release.yml` on `v*` tag push. Before
+promoting a draft release to published, run through `scripts/installer_qa.md`
+on a clean VM for each OS (macOS arm64, Ubuntu 24.04, Windows 11).
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -70,7 +122,12 @@ cowork/
     cowork-core/    # ADK agents, tools, skills, workspace, config
     cowork-server/  # FastAPI + WebSocket transport
     cowork-cli/     # Typer CLI (developer tool)
-  tests/            # 62 unit tests (pytest)
+    cowork-web/     # React + TypeScript + Tailwind chat UI
+    cowork-app/     # Tauri desktop shell (Rust) that embeds Python + UI
+  scripts/
+    bundle_python.py  # Fetch python-build-standalone + pip-install Cowork
+    installer_qa.md   # Manual smoke-test checklist for release installers
+  tests/            # pytest unit + smoke tests
 ```
 
 ## Development

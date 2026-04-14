@@ -22,6 +22,13 @@ CoworkWorkspaces/
 *.eml
 .env
 
+# Bundled Python runtime (produced by scripts/bundle_python.py, not committed)
+.cache/pbs/
+packages/cowork-app/src-tauri/resources/python/
+
+# Claude Code session data
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
