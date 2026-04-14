@@ -1,12 +1,14 @@
 /**
  * Typed client for the cowork /v1 protocol.
  *
- * One class, no external state libs. Surfaces call `createSession`, then
- * `sendMessage` + `onFrame` to stream events over the WebSocket.
+ * Streams ADK ``Event`` JSON over either SSE (default, browser-friendly)
+ * or WebSocket (kept for future bidirectional use). Both wire formats
+ * are identical to Google ADK's own ``/run_sse`` / ``/run_live`` — raw
+ * ``Event.model_dump_json(exclude_none=True, by_alias=True)``.
  */
 
 import type {
-  Frame,
+  AdkEvent,
   HealthInfo,
   SessionInfo,
   ProjectInfo,
@@ -14,17 +16,17 @@ import type {
   FileEntry,
 } from "./types";
 
-export type FrameHandler = (frame: Frame) => void;
+export type EventHandler = (ev: AdkEvent) => void;
 
 export class CoworkClient {
   private baseUrl: string;
   private token: string;
   private ws: WebSocket | null = null;
-  private frameHandler: FrameHandler | null = null;
+  private es: EventSource | null = null;
+  private eventHandler: EventHandler | null = null;
 
   constructor(baseUrl = "", token?: string) {
     this.baseUrl = baseUrl;
-    // Use injected build-time token, or explicit override
     this.token =
       token ?? (typeof __COWORK_TOKEN__ !== "undefined" ? __COWORK_TOKEN__ : "");
   }
@@ -116,7 +118,7 @@ export class CoworkClient {
     return r.json();
   }
 
-  async getHistory(sessionId: string): Promise<unknown[]> {
+  async getHistory(sessionId: string): Promise<AdkEvent[]> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/history`,
       { headers: this.headers() },
@@ -154,7 +156,6 @@ export class CoworkClient {
     return `${this.baseUrl}/v1/projects/${project}/preview/${path}${qs}`;
   }
 
-  /** Upload a file (from the Tauri drag-drop bridge or an <input type=file>). */
   async uploadFile(
     project: string,
     file: File | Blob,
@@ -175,10 +176,41 @@ export class CoworkClient {
     return r.json();
   }
 
-  /** Connect WebSocket for a session. Calls `onFrame` for each event. */
-  connect(sessionId: string, onFrame: FrameHandler): void {
+  /** Open an SSE stream — preferred for browser clients. */
+  connectStream(sessionId: string, onEvent: EventHandler): void {
     this.disconnect();
-    this.frameHandler = onFrame;
+    this.eventHandler = onEvent;
+    const qs = this.token ? `?token=${encodeURIComponent(this.token)}` : "";
+    const url = `${this.baseUrl}/v1/sessions/${sessionId}/events/stream${qs}`;
+    this.es = new EventSource(url);
+
+    this.es.onopen = () => console.log("[cowork] sse open", url);
+    this.es.onmessage = (ev) => {
+      try {
+        const adkEvent: AdkEvent = JSON.parse(ev.data);
+        this.eventHandler?.(adkEvent);
+      } catch {
+        /* ignore unparseable frames */
+      }
+    };
+    this.es.onerror = () => {
+      // EventSource auto-reconnects on transient errors; surface a
+      // soft error only when the stream is fully closed.
+      if (this.es && this.es.readyState === EventSource.CLOSED) {
+        this.eventHandler?.({
+          author: "cowork-client",
+          errorCode: "SSE_CLOSED",
+          errorMessage: "SSE stream closed",
+          turnComplete: true,
+        });
+      }
+    };
+  }
+
+  /** Connect via WebSocket. Kept for callers that want full duplex. */
+  connect(sessionId: string, onEvent: EventHandler): void {
+    this.disconnect();
+    this.eventHandler = onEvent;
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = this.baseUrl
       ? this.baseUrl.replace(/^https?:/, proto)
@@ -189,35 +221,35 @@ export class CoworkClient {
 
     this.ws.onopen = () => console.log("[cowork] ws open", url);
     this.ws.onmessage = (ev) => {
-      console.log("[cowork] ws frame", ev.data);
       try {
-        const frame: Frame = JSON.parse(ev.data);
-        if (frame.type === "multi") {
-          for (const sub of frame.frames) {
-            this.frameHandler?.(sub);
-          }
-        } else {
-          this.frameHandler?.(frame);
-        }
+        const adkEvent: AdkEvent = JSON.parse(ev.data);
+        this.eventHandler?.(adkEvent);
       } catch {
-        // ignore unparseable frames
+        /* ignore */
       }
     };
-
     this.ws.onerror = () => {
-      this.frameHandler?.({ type: "error", message: "WebSocket error" });
+      this.eventHandler?.({
+        author: "cowork-client",
+        errorCode: "WS_ERROR",
+        errorMessage: "WebSocket error",
+        turnComplete: true,
+      });
     };
-
     this.ws.onclose = () => {
       this.ws = null;
     };
   }
 
   disconnect(): void {
+    if (this.es) {
+      this.es.close();
+      this.es = null;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
-    this.frameHandler = null;
+    this.eventHandler = null;
   }
 }

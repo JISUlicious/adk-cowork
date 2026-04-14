@@ -7,7 +7,6 @@ Routes live inline for M0/M1 to keep the surface small; they split into
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 from cowork_core import CoworkConfig, CoworkRuntime, PreviewCache, build_runtime
@@ -21,11 +20,12 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+from google.adk.events.event import Event
 from google.genai import types as genai_types
 
 from cowork_server.auth import TokenGuard, generate_token
-from cowork_server.transport import event_to_frame, events_to_history
+from cowork_server.transport import event_to_payload, events_to_history
 
 
 def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> FastAPI:
@@ -132,6 +132,44 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         tasks.add(task)
         task.add_done_callback(tasks.discard)
         return {"status": "accepted"}
+
+    @app.get("/v1/sessions/{session_id}/events/stream", dependencies=[Depends(guard)])
+    async def events_sse(session_id: str) -> StreamingResponse:
+        """Stream ADK events as SSE.
+
+        Wire contract matches Google ADK's ``/run_sse``: each ``data:``
+        line is a full Event JSON. Stream closes after an event with
+        ``turnComplete: true`` — the same signal ADK uses.
+        """
+        queue = queues.get(session_id)
+        if queue is None:
+            raise HTTPException(status_code=404, detail="unknown session")
+
+        async def gen() -> Any:
+            import json as _json
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                yield f"data: {payload}\n\n"
+                try:
+                    done = _json.loads(payload).get("turnComplete") is True
+                except (ValueError, AttributeError):
+                    done = False
+                if done:
+                    return
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     @app.websocket("/v1/sessions/{session_id}/events")
     async def events_ws(ws: WebSocket, session_id: str) -> None:
@@ -268,21 +306,49 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     return app
 
 
+_SERVER_AUTHOR = "cowork-server"
+
+
 async def _run_turn(runner: Any, queue: asyncio.Queue[str], session_id: str, text: str) -> None:
+    """Drive one ADK run and push each Event (JSON) onto ``queue``.
+
+    Wire format mirrors ADK's own ``/run_sse`` and ``/run_live``: the full
+    ``Event.model_dump_json(exclude_none=True, by_alias=True)``. The last
+    event of a turn carries ``turnComplete: true``; SSE consumers close
+    the stream on that flag.
+    """
     import sys
     content = genai_types.Content(role="user", parts=[genai_types.Part(text=text)])
     event_count = 0
+    last_event: Event | None = None
     try:
         async for event in runner.run_async(
             user_id="local", session_id=session_id, new_message=content
         ):
             event_count += 1
-            frame = event_to_frame(event)
-            print(f"[cowork-server] event#{event_count} -> frame={frame}", file=sys.stderr, flush=True)
-            await queue.put(json.dumps(frame))
+            last_event = event
+            await queue.put(event_to_payload(event))
     except Exception as e:
         print(f"[cowork-server] run_turn error: {e!r}", file=sys.stderr, flush=True)
-        await queue.put(json.dumps({"type": "error", "message": str(e)}))
+        err = Event(
+            author=_SERVER_AUTHOR,
+            invocation_id=getattr(last_event, "invocation_id", "") or "",
+            error_code="INTERNAL",
+            error_message=str(e),
+            turn_complete=True,
+        )
+        await queue.put(event_to_payload(err))
+        return
     finally:
         print(f"[cowork-server] run_turn done, {event_count} events", file=sys.stderr, flush=True)
-        await queue.put(json.dumps({"type": "end_turn"}))
+
+    # Guarantee a final event with turn_complete=True so SSE consumers
+    # know to close. ADK usually sets this on the last event already; if
+    # it didn't, emit a trailing sentinel.
+    if last_event is None or not getattr(last_event, "turn_complete", False):
+        sentinel = Event(
+            author=_SERVER_AUTHOR,
+            invocation_id=getattr(last_event, "invocation_id", "") or "",
+            turn_complete=True,
+        )
+        await queue.put(event_to_payload(sentinel))

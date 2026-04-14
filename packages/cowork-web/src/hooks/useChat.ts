@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { CoworkClient } from "../transport/client";
 import { notify } from "../transport/tauri";
-import type { Frame, ToolCallFrame, ToolResultFrame } from "../transport/types";
+import type { AdkEvent } from "../transport/types";
 
 export interface ToolCallEntry {
   id: string;
@@ -18,135 +18,137 @@ export interface ChatMessage {
   toolCalls: ToolCallEntry[];
 }
 
+function newAssistant(): ChatMessage {
+  return { role: "assistant", text: "", thought: "", toolCalls: [] };
+}
+
 export function useChat(client: CoworkClient) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
   const pendingRef = useRef<ChatMessage | null>(null);
-  const toolMapRef = useRef<Map<string, number>>(new Map());
+  // id → (message-index, toolCalls-index)
+  const toolMapRef = useRef<Map<string, [number, number]>>(new Map());
 
-  const handleFrame = useCallback((frame: Frame) => {
-    switch (frame.type) {
-      case "text": {
-        if (!pendingRef.current) {
-          pendingRef.current = { role: "assistant", text: "", thought: "", toolCalls: [] };
-        }
-        if (frame.thought) {
-          pendingRef.current.thought += frame.text;
-        } else {
-          pendingRef.current.text += frame.text;
-        }
-        // Snapshot now — react's updater runs later, and end_turn may have
-        // cleared pendingRef by the time it runs.
-        const snapshot: ChatMessage = {
-          role: "assistant",
-          text: pendingRef.current.text,
-          thought: pendingRef.current.thought,
-          toolCalls: [...pendingRef.current.toolCalls],
-        };
+  /**
+   * Fold one ADK event into the message timeline.
+   *
+   * Contract matches Google ADK's native event stream: we read
+   * ``content.role`` / ``content.parts`` and terminate a turn on
+   * ``turnComplete``. The same function handles live events and
+   * replayed history.
+   */
+  const handleEvent = useCallback((ev: AdkEvent) => {
+    const parts = ev.content?.parts ?? [];
+    const role = ev.content?.role ?? "";
+
+    const hasFunctionResponse = parts.some((p) => p.functionResponse);
+    const hasFunctionCall = parts.some((p) => p.functionCall);
+    const hasText = parts.some((p) => typeof p.text === "string" && p.text);
+
+    // User turn: role === "user" and not a tool response echo.
+    const isUserTurn = role === "user" && !hasFunctionResponse && hasText;
+
+    if (isUserTurn) {
+      const text = parts.map((p) => p.text ?? "").join("");
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", text, thought: "", toolCalls: [] },
+      ]);
+    } else if (hasFunctionResponse) {
+      // Correlate tool_response parts with previously-recorded tool_calls.
+      for (const part of parts) {
+        const fr = part.functionResponse;
+        if (!fr?.id) continue;
+        const loc = toolMapRef.current.get(fr.id);
+        if (!loc) continue;
+        const [mi, ti] = loc;
+        const result = (fr.response ?? {}) as Record<string, unknown>;
         setMessages((prev) => {
           const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant") {
-            next[next.length - 1] = snapshot;
-          } else {
-            next.push(snapshot);
-          }
-          return next;
-        });
-        break;
-      }
-      case "tool_call": {
-        const tc = frame as ToolCallFrame;
-        if (!pendingRef.current) {
-          pendingRef.current = { role: "assistant", text: "", thought: "", toolCalls: [] };
-        }
-        const entry: ToolCallEntry = {
-          id: tc.id || `tc-${Date.now()}`,
-          name: tc.name,
-          args: tc.args || {},
-          status: "pending",
-        };
-        pendingRef.current.toolCalls.push(entry);
-        toolMapRef.current.set(
-          entry.id,
-          pendingRef.current.toolCalls.length - 1,
-        );
-        const snapshot: ChatMessage = {
-          role: "assistant",
-          text: pendingRef.current.text,
-          thought: pendingRef.current.thought,
-          toolCalls: [...pendingRef.current.toolCalls],
-        };
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last?.role === "assistant") {
-            next[next.length - 1] = snapshot;
-          } else {
-            next.push(snapshot);
-          }
-          return next;
-        });
-        break;
-      }
-      case "tool_result": {
-        const tr = frame as ToolResultFrame;
-        if (!pendingRef.current) break;
-        const idx = toolMapRef.current.get(tr.id || "");
-        if (idx !== undefined && pendingRef.current.toolCalls[idx]) {
-          const result = tr.result || {};
-          const tc = pendingRef.current.toolCalls[idx];
+          const msg = next[mi];
+          if (!msg) return prev;
+          const tcs = msg.toolCalls.map((t) => ({ ...t }));
+          const tc = tcs[ti];
+          if (!tc) return prev;
           tc.result = result;
-          if (result.confirmation_required) {
-            tc.status = "confirmation";
-          } else if (result.error) {
-            tc.status = "error";
-          } else {
-            tc.status = "ok";
-          }
-          const snapshot: ChatMessage = {
-            role: "assistant",
-            text: pendingRef.current.text,
-            thought: pendingRef.current.thought,
-            toolCalls: pendingRef.current.toolCalls.map((t) => ({ ...t })),
-          };
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last?.role === "assistant") {
-              next[next.length - 1] = snapshot;
-            }
-            return next;
+          if (result.confirmation_required) tc.status = "confirmation";
+          else if (result.error) tc.status = "error";
+          else tc.status = "ok";
+          next[mi] = { ...msg, toolCalls: tcs };
+          return next;
+        });
+      }
+    } else if (hasText || hasFunctionCall) {
+      // Assistant content: text (body or thought) and/or tool_call parts.
+      if (!pendingRef.current) {
+        pendingRef.current = newAssistant();
+      }
+      const pending = pendingRef.current;
+
+      for (const part of parts) {
+        if (typeof part.text === "string" && part.text) {
+          if (part.thought) pending.thought += part.text;
+          else pending.text += part.text;
+        }
+        if (part.functionCall) {
+          const fc = part.functionCall;
+          const id =
+            fc.id ?? `tc-${Date.now()}-${pending.toolCalls.length}`;
+          pending.toolCalls.push({
+            id,
+            name: fc.name ?? "",
+            args: fc.args ?? {},
+            status: "pending",
           });
         }
-        break;
       }
-      case "end_turn": {
-        pendingRef.current = null;
-        toolMapRef.current.clear();
-        setSending(false);
-        // Native notification if the app is backgrounded.
-        if (typeof document !== "undefined" && document.hidden) {
-          void notify("Cowork", "Turn complete");
+
+      const snapshot: ChatMessage = {
+        role: "assistant",
+        text: pending.text,
+        thought: pending.thought,
+        toolCalls: pending.toolCalls.map((t) => ({ ...t })),
+      };
+
+      setMessages((prev) => {
+        const next = [...prev];
+        const lastIdx = next.length - 1;
+        const last = next[lastIdx];
+        let msgIdx: number;
+        if (last?.role === "assistant") {
+          next[lastIdx] = snapshot;
+          msgIdx = lastIdx;
+        } else {
+          next.push(snapshot);
+          msgIdx = next.length - 1;
         }
-        break;
-      }
-      case "error": {
-        pendingRef.current = null;
-        toolMapRef.current.clear();
-        setSending(false);
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            text: `Error: ${frame.message}`,
-            thought: "",
-            toolCalls: [],
-          },
-        ]);
-        break;
+        // Refresh tool-id index (message index may have shifted).
+        pending.toolCalls.forEach((tc, ti) => {
+          toolMapRef.current.set(tc.id, [msgIdx, ti]);
+        });
+        return next;
+      });
+    }
+
+    if (ev.errorMessage || ev.errorCode) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: `Error${ev.errorCode ? ` (${ev.errorCode})` : ""}: ${ev.errorMessage ?? ""}`,
+          thought: "",
+          toolCalls: [],
+        },
+      ]);
+    }
+
+    if (ev.turnComplete) {
+      pendingRef.current = null;
+      setSending(false);
+      if (typeof document !== "undefined" && document.hidden) {
+        void notify("Cowork", "Turn complete");
       }
     }
   }, []);
@@ -156,9 +158,9 @@ export function useChat(client: CoworkClient) {
       client.disconnect();
       sessionRef.current = sid;
       setSessionId(sid);
-      client.connect(sid, handleFrame);
+      client.connectStream(sid, handleEvent);
     },
-    [client, handleFrame],
+    [client, handleEvent],
   );
 
   const ensureSession = useCallback(
@@ -175,14 +177,20 @@ export function useChat(client: CoworkClient) {
     async (existingSessionId: string, project: string) => {
       try {
         const info = await client.resumeSession(existingSessionId, project);
-        let history: ChatMessage[] = [];
+        setMessages([]);
+        pendingRef.current = null;
+        toolMapRef.current.clear();
         try {
-          const raw = (await client.getHistory(info.session_id)) as ChatMessage[];
-          history = raw;
+          const events = await client.getHistory(info.session_id);
+          for (const ev of events) handleEvent(ev);
+          // Replayed events are historical — never leave sending=true or
+          // a pending assistant message open just because the last
+          // recorded event lacked turnComplete.
+          pendingRef.current = null;
+          setSending(false);
         } catch {
-          // If history unavailable, fall back to empty timeline.
+          /* history unavailable — start clean */
         }
-        setMessages(history);
         connectSession(info.session_id);
       } catch (e) {
         setMessages((prev) => [
@@ -196,7 +204,7 @@ export function useChat(client: CoworkClient) {
         ]);
       }
     },
-    [client, connectSession],
+    [client, connectSession, handleEvent],
   );
 
   const send = useCallback(

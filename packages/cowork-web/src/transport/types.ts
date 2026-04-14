@@ -1,50 +1,53 @@
-/** Wire types matching cowork-server transport frames. */
+/**
+ * Wire types for cowork-server streams.
+ *
+ * The server forwards raw Google ADK ``Event`` objects via
+ * ``Event.model_dump_json(exclude_none=True, by_alias=True)``, matching
+ * ADK's own ``/run_sse`` / ``/run_live`` contract. All field names are
+ * camelCase. Mirror here only the fields the UI consumes — everything
+ * else rides through via the string-index signature.
+ */
 
-export interface TextFrame {
-  type: "text";
-  text: string;
-  author?: string;
+export interface AdkFunctionCall {
+  id?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+}
+
+export interface AdkFunctionResponse {
+  id?: string;
+  name?: string;
+  response?: Record<string, unknown>;
+}
+
+export interface AdkPart {
+  text?: string;
   thought?: boolean;
+  functionCall?: AdkFunctionCall;
+  functionResponse?: AdkFunctionResponse;
+  [k: string]: unknown;
 }
 
-export interface ToolCallFrame {
-  type: "tool_call";
-  name: string;
-  args: Record<string, unknown>;
+export interface AdkContent {
+  role?: string;
+  parts?: AdkPart[];
+}
+
+export interface AdkEvent {
   id?: string;
+  invocationId?: string;
   author?: string;
+  content?: AdkContent;
+  actions?: Record<string, unknown>;
+  partial?: boolean;
+  turnComplete?: boolean;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  longRunningToolIds?: string[];
+  timestamp?: number;
+  usageMetadata?: Record<string, unknown>;
+  [k: string]: unknown;
 }
-
-export interface ToolResultFrame {
-  type: "tool_result";
-  name: string;
-  result: Record<string, unknown>;
-  id?: string;
-  author?: string;
-}
-
-export interface EndTurnFrame {
-  type: "end_turn";
-}
-
-export interface ErrorFrame {
-  type: "error";
-  message: string;
-}
-
-export interface MultiFrame {
-  type: "multi";
-  frames: Frame[];
-  author?: string;
-}
-
-export type Frame =
-  | TextFrame
-  | ToolCallFrame
-  | ToolResultFrame
-  | EndTurnFrame
-  | ErrorFrame
-  | MultiFrame;
 
 /** API response types */
 
