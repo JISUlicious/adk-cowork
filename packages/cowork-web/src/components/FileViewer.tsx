@@ -66,12 +66,16 @@ function PreviewFetcher({
     );
   }
 
-  // HTML preview (markdown) — render inline instead of iframe to avoid sandbox warnings
+  // HTML preview (markdown). Render in a sandboxed iframe so the
+  // converter's <style> rules (which target `body`) don't leak into
+  // the host page and squish the whole UI.
   if (contentType.includes("text/html")) {
     return (
-      <div
-        className="p-4 prose prose-sm dark:prose-invert max-w-none"
-        dangerouslySetInnerHTML={{ __html: data }}
+      <iframe
+        title="preview"
+        srcDoc={data}
+        sandbox=""
+        className="w-full h-full min-h-[60vh] border-0"
       />
     );
   }

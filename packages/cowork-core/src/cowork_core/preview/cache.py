@@ -6,6 +6,10 @@ from pathlib import Path
 
 from cowork_core.preview.converters import PreviewResult, content_hash, preview_file
 
+# Bump when the rendered output format changes so stale entries are
+# ignored on upgrade (e.g. markdown wrapper CSS rework).
+_RENDER_VERSION = "v2"
+
 
 class PreviewCache:
     def __init__(self, cache_dir: Path) -> None:
@@ -15,7 +19,7 @@ class PreviewCache:
     def get(self, file_path: Path) -> PreviewResult:
         chash = content_hash(file_path)
         ext = file_path.suffix.lower()
-        cache_key = f"{chash}_{ext.lstrip('.')}"
+        cache_key = f"{chash}_{ext.lstrip('.')}_{_RENDER_VERSION}"
         cached = self._dir / cache_key
 
         if cached.exists():

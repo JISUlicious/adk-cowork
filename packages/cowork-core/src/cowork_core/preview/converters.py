@@ -83,12 +83,28 @@ def _preview_md(path: Path, chash: str) -> PreviewResult:
 
 def _wrap_html(inner: str, title: str) -> str:
     safe_title = html.escape(title)
+    style = (
+        ":root{color-scheme:light dark}"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        "max-width:48em;margin:2em auto;padding:0 1em;"
+        "background:#fff;color:#111}"
+        "pre{background:#f4f4f4;padding:1em;overflow-x:auto}"
+        "code{background:#f4f4f4;padding:0.2em 0.4em}"
+        "a{color:#2563eb}"
+        "@media (prefers-color-scheme: dark){"
+        "body{background:#0b0f17;color:#e5e7eb}"
+        "pre,code{background:#1f2937;color:#e5e7eb}"
+        "a{color:#60a5fa}"
+        "blockquote{border-left:3px solid #374151;color:#9ca3af}"
+        "hr{border-color:#374151}"
+        "th,td{border-color:#374151}"
+        "}"
+    )
     return (
         f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
         f"<title>{safe_title}</title>"
-        f"<style>body{{font-family:sans-serif;max-width:48em;margin:2em auto;padding:0 1em}}"
-        f"pre{{background:#f4f4f4;padding:1em;overflow-x:auto}}"
-        f"code{{background:#f4f4f4;padding:0.2em 0.4em}}</style>"
+        f"<meta name='color-scheme' content='light dark'>"
+        f"<style>{style}</style>"
         f"</head><body>{inner}</body></html>"
     )
 
