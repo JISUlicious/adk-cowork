@@ -26,17 +26,18 @@ jobs:
             triple: x86_64-pc-windows-msvc
             bundle: msi,nsis
     runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: cowork
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
           enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - uses: actions/setup-node@v4
         with:
@@ -55,15 +56,15 @@ jobs:
         run: uv run python scripts/bundle_python.py --target ${{ matrix.triple }}
 
       - name: Install cowork-app npm deps
-        working-directory: cowork/packages/cowork-app
+        working-directory: packages/cowork-app
         run: npm ci
 
       - name: Install cowork-web npm deps
-        working-directory: cowork/packages/cowork-web
+        working-directory: packages/cowork-web
         run: npm ci
 
       - name: Build Tauri bundle
-        working-directory: cowork/packages/cowork-app
+        working-directory: packages/cowork-app
         env:
           TAURI_BUNDLE_TARGETS: ${{ matrix.bundle }}
         run: npx tauri build --bundles ${{ matrix.bundle }}
@@ -73,10 +74,10 @@ jobs:
         with:
           draft: true
           files: |
-            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.dmg
-            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.deb
-            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.AppImage
-            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.msi
-            cowork/packages/cowork-app/src-tauri/target/release/bundle/**/*.exe
+            packages/cowork-app/src-tauri/target/release/bundle/**/*.dmg
+            packages/cowork-app/src-tauri/target/release/bundle/**/*.deb
+            packages/cowork-app/src-tauri/target/release/bundle/**/*.AppImage
+            packages/cowork-app/src-tauri/target/release/bundle/**/*.msi
+            packages/cowork-app/src-tauri/target/release/bundle/**/*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
