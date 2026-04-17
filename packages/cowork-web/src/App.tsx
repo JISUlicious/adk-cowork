@@ -56,10 +56,18 @@ function App({ baseUrl, token }: AppProps = {}) {
     if (!project) return;
     try {
       await client.deleteSession(project, sid);
-      // If the deleted session is active, reset the chat
       if (sid === sessionId) reset();
     } catch (e) {
       console.error("[cowork] delete session failed:", e);
+    }
+  };
+
+  const handleDeleteProject = async (slug: string) => {
+    try {
+      await client.deleteProject(slug);
+      if (slug === project) reset();
+    } catch (e) {
+      console.error("[cowork] delete project failed:", e);
     }
   };
 
@@ -146,6 +154,7 @@ function App({ baseUrl, token }: AppProps = {}) {
               onSelectSession={handleSelectSession}
               onNewSession={handleNewSession}
               onDeleteSession={handleDeleteSession}
+              onDeleteProject={handleDeleteProject}
             />
           </div>
         </aside>

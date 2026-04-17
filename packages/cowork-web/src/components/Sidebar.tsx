@@ -11,6 +11,7 @@ interface Props {
   onSelectSession: (sessionId: string) => void;
   onNewSession: () => void;
   onDeleteSession: (sessionId: string) => Promise<void>;
+  onDeleteProject: (slug: string) => Promise<void>;
 }
 
 export function Sidebar({
@@ -21,6 +22,7 @@ export function Sidebar({
   onSelectSession,
   onNewSession,
   onDeleteSession,
+  onDeleteProject,
 }: Props) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
@@ -29,6 +31,7 @@ export function Sidebar({
   const [createError, setCreateError] = useState<string | null>(null);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmDeleteProject, setConfirmDeleteProject] = useState<string | null>(null);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -105,47 +108,80 @@ export function Sidebar({
         <div className="space-y-1 pb-3">
           {projects.map((p) => {
             const isSelected = p.slug === project;
+            const isPendingDeleteProject = confirmDeleteProject === p.slug;
             return (
               <div key={p.slug}>
-                <button
-                  type="button"
-                  className={`group flex min-h-9 w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[13px] transition-colors ${
+                <div
+                  className={`group flex min-h-9 w-full items-center rounded-xl text-left text-[13px] transition-colors ${
                     isSelected
                       ? "bg-[var(--dls-active)] text-[var(--dls-text-primary)]"
                       : "text-[var(--dls-text-secondary)] hover:bg-[var(--dls-hover)] hover:text-[var(--dls-text-primary)]"
                   }`}
-                  onClick={() => onSelectProject(p.slug)}
                 >
-                  <div className="flex min-w-0 items-center gap-3">
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2"
+                    onClick={() => { setConfirmDeleteProject(null); onSelectProject(p.slug); }}
+                  >
                     <div
                       className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-white text-[10px] font-bold"
-                      style={{
-                        backgroundColor: projectSwatchColor(p.slug),
-                      }}
+                      style={{ backgroundColor: projectSwatchColor(p.slug) }}
                     >
                       {p.name.charAt(0).toUpperCase()}
                     </div>
-                    <span className="min-w-0 truncate text-[14px]">
-                      {p.name}
-                    </span>
-                  </div>
-                  {isSelected && (
+                    <span className="min-w-0 truncate text-[14px]">{p.name}</span>
+                  </button>
+                  <div className="flex shrink-0 items-center pr-1">
                     <button
                       type="button"
-                      className="rounded-md p-1 text-[var(--dls-text-secondary)] hover:bg-[var(--dls-hover)] hover:text-[var(--dls-text-primary)]"
+                      className="rounded-md p-1 opacity-0 transition-opacity group-hover:opacity-100 text-[var(--dls-text-secondary)] hover:text-red-500"
+                      title="Delete project"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setProjectsExpanded((v) => !v);
+                        setConfirmDeleteProject(isPendingDeleteProject ? null : p.slug);
                       }}
                     >
-                      {projectsExpanded ? (
-                        <ChevronDown size={14} />
-                      ) : (
-                        <ChevronRight size={14} />
-                      )}
+                      <Trash2 size={12} />
                     </button>
-                  )}
-                </button>
+                    {isSelected && (
+                      <button
+                        type="button"
+                        className="rounded-md p-1 text-[var(--dls-text-secondary)] hover:bg-[var(--dls-hover)] hover:text-[var(--dls-text-primary)]"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setProjectsExpanded((v) => !v);
+                        }}
+                      >
+                        {projectsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {isPendingDeleteProject && (
+                  <div className="mx-1 mb-1 flex items-center justify-between rounded-xl bg-red-500/10 px-3 py-1.5 text-[11px]">
+                    <span className="text-red-500">Delete project + all files?</span>
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        className="rounded-md px-2 py-0.5 text-[var(--dls-text-secondary)] hover:bg-[var(--dls-hover)]"
+                        onClick={() => setConfirmDeleteProject(null)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md bg-red-500 px-2 py-0.5 text-white hover:bg-red-600"
+                        onClick={async () => {
+                          setConfirmDeleteProject(null);
+                          await onDeleteProject(p.slug);
+                          await refreshProjects();
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Sessions under selected project */}
                 {isSelected && projectsExpanded && (

@@ -97,6 +97,7 @@ class ProjectRegistryBase(Protocol):
     def new_session(self, project_slug: str, title: str | None = None) -> Session: ...
     def get_session(self, project_slug: str, session_id: str) -> Session: ...
     def delete_session(self, project_slug: str, session_id: str) -> None: ...
+    def delete_project(self, slug: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,15 @@ class ProjectRegistry:
         toml_path = root / "session.toml"
         if not toml_path.exists():
             raise FileNotFoundError(f"no session {session_id} in {project_slug}")
+        shutil.rmtree(root)
+
+    def delete_project(self, slug: str) -> None:
+        """Remove a project directory entirely."""
+        import shutil
+
+        root = self.workspace.resolve(f"projects/{slug}")
+        if not (root / "project.toml").exists():
+            raise FileNotFoundError(f"no project {slug}")
         shutil.rmtree(root)
 
     def promote(self, session: Session, rel_path: str | Path) -> Path:
