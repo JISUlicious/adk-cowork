@@ -5,7 +5,7 @@ from __future__ import annotations
 from google.adk.tools.tool_context import ToolContext
 
 from cowork_core.tools.base import get_cowork_context
-from cowork_core.tools.fs._paths import resolve_project_path
+from cowork_core.tools.fs._paths import try_resolve_project_path
 
 
 def fs_write(path: str, content: str, tool_context: ToolContext) -> dict[str, object]:
@@ -19,7 +19,9 @@ def fs_write(path: str, content: str, tool_context: ToolContext) -> dict[str, ob
         ``{"path": str, "bytes": int}``.
     """
     ctx = get_cowork_context(tool_context)
-    abspath = resolve_project_path(ctx, path)
+    abspath = try_resolve_project_path(ctx, path)
+    if isinstance(abspath, str):
+        return {"error": abspath}
     abspath.parent.mkdir(parents=True, exist_ok=True)
     data = content.encode("utf-8")
     abspath.write_bytes(data)

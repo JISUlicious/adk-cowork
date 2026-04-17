@@ -47,13 +47,14 @@ def get_cowork_context(tool_context: ToolContext) -> CoworkToolContext:
 
 def record_read(tool_context: ToolContext, path: str) -> None:
     """Mark a project-relative path as read in this session."""
-    reads: set[str] = tool_context.state.setdefault(COWORK_READS_KEY, set())
-    reads.add(path)
+    reads: list[str] = tool_context.state.setdefault(COWORK_READS_KEY, [])
+    if path not in reads:
+        reads.append(path)
 
 
 def was_read(tool_context: ToolContext, path: str) -> bool:
     """Check whether a project-relative path has been read in this session."""
     reads = tool_context.state.get(COWORK_READS_KEY)
-    if not isinstance(reads, set):
+    if not isinstance(reads, list):
         return False
     return path in reads

@@ -35,3 +35,11 @@ def resolve_project_path(ctx: CoworkToolContext, rel: str) -> Path:
     except ValueError as e:
         raise WorkspaceError(f"path escapes {head}/: {rel}") from e
     return candidate
+
+
+def try_resolve_project_path(ctx: CoworkToolContext, rel: str) -> "Path | str":
+    """Like ``resolve_project_path`` but returns an error string on failure."""
+    try:
+        return resolve_project_path(ctx, rel)
+    except WorkspaceError as e:
+        return str(e)

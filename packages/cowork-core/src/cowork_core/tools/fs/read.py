@@ -5,7 +5,7 @@ from __future__ import annotations
 from google.adk.tools.tool_context import ToolContext
 
 from cowork_core.tools.base import get_cowork_context, record_read
-from cowork_core.tools.fs._paths import resolve_project_path
+from cowork_core.tools.fs._paths import try_resolve_project_path
 
 _MAX_BYTES = 2_000_000
 
@@ -20,7 +20,9 @@ def fs_read(path: str, tool_context: ToolContext) -> dict[str, object]:
         ``{"path": str, "content": str, "truncated": bool}``.
     """
     ctx = get_cowork_context(tool_context)
-    abspath = resolve_project_path(ctx, path)
+    abspath = try_resolve_project_path(ctx, path)
+    if isinstance(abspath, str):
+        return {"error": abspath}
     if not abspath.is_file():
         return {"error": f"not a file: {path}"}
     data = abspath.read_bytes()
