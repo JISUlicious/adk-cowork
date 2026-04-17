@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { CoworkClient } from "./transport/client";
 import { useChat } from "./hooks/useChat";
 import { TopBar } from "./components/TopBar";
+import { Sidebar } from "./components/Sidebar";
 import { ChatPane } from "./components/ChatPane";
 import { FileCanvas } from "./components/FileCanvas";
+import { StatusBar } from "./components/StatusBar";
 import {
   isTauri,
   onFileDrop,
@@ -25,6 +27,7 @@ function App({ baseUrl, token }: AppProps = {}) {
   });
   const [project, setProject] = useState<string | null>(null);
   const [dropStatus, setDropStatus] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const { messages, sending, send, reset, newSession, resumeSession, sessionId } =
     useChat(client);
 
@@ -64,11 +67,9 @@ function App({ baseUrl, token }: AppProps = {}) {
         }
         for (const p of paths) {
           const name = p.split("/").pop() || "upload.bin";
-          setDropStatus(`Uploading ${name}…`);
+          setDropStatus(`Uploading ${name}...`);
           try {
             const bytes = await readTauriFile(p);
-            // Copy into a fresh ArrayBuffer so Blob's type predicate is happy
-            // (Uint8Array's backing buffer may be typed as SharedArrayBuffer).
             const copy = new Uint8Array(bytes.byteLength);
             copy.set(bytes);
             await client.uploadFile(
@@ -112,29 +113,58 @@ function App({ baseUrl, token }: AppProps = {}) {
   }, [reset]);
 
   return (
-    <div className="h-screen flex flex-col bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
-      <TopBar
-        client={client}
-        project={project}
-        sessionId={sessionId}
-        onSelectProject={handleSelectProject}
-        onSelectSession={handleSelectSession}
-        onNewSession={handleNewSession}
-      />
-      <div className="flex-1 flex min-h-0">
-        <div className="w-1/2 border-r border-gray-200 dark:border-gray-700 flex flex-col">
-          <ChatPane messages={messages} sending={sending} onSend={handleSend} />
-        </div>
-        <div className="w-1/2 flex flex-col">
+    <div className="h-[100dvh] min-h-screen w-full overflow-hidden bg-[var(--dls-app-bg)] text-[var(--dls-text-primary)] font-sans p-3 md:p-4">
+      <div className="flex h-full w-full gap-3 md:gap-4">
+        {/* Left sidebar */}
+        <aside
+          className={`${
+            sidebarOpen ? "flex" : "hidden"
+          } relative shrink-0 w-64 flex-col overflow-hidden rounded-[24px] border border-[var(--dls-border)] bg-[var(--dls-sidebar)] p-2.5 lg:flex`}
+        >
+          <div className="shrink-0 px-2 py-2 mb-2">
+            <span className="text-[15px] font-semibold text-[var(--dls-text-primary)]">
+              Cowork
+            </span>
+          </div>
+          <div className="flex min-h-0 flex-1">
+            <Sidebar
+              client={client}
+              project={project}
+              sessionId={sessionId}
+              onSelectProject={handleSelectProject}
+              onSelectSession={handleSelectSession}
+              onNewSession={handleNewSession}
+            />
+          </div>
+        </aside>
+
+        {/* Main panel — chat */}
+        <main className="min-w-0 flex-1 flex flex-col overflow-hidden rounded-[24px] border border-[var(--dls-border)] bg-[var(--dls-surface)] shadow-[var(--dls-shell-shadow)]">
+          <TopBar
+            client={client}
+            project={project}
+            sessionId={sessionId}
+            onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          />
+          <div className="flex-1 flex flex-col min-h-0">
+            <ChatPane messages={messages} sending={sending} onSend={handleSend} />
+          </div>
+          <StatusBar sessionId={sessionId} />
+        </main>
+
+        {/* Right panel — files */}
+        <aside className="hidden xl:flex shrink-0 w-80 flex-col overflow-hidden rounded-[24px] border border-[var(--dls-border)] bg-[var(--dls-surface)] shadow-[var(--dls-card-shadow)]">
           <FileCanvas
             client={client}
             project={project}
             sessionId={sessionId}
           />
-        </div>
+        </aside>
       </div>
+
+      {/* Drop status overlay */}
       {dropStatus && (
-        <div className="px-3 py-1 text-xs bg-blue-50 dark:bg-blue-900/30 border-t border-blue-200 dark:border-blue-800">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 text-xs rounded-full bg-[var(--dls-surface)] border border-[var(--dls-border)] shadow-[var(--dls-shell-shadow)] text-[var(--dls-text-secondary)]">
           {dropStatus}
         </div>
       )}
