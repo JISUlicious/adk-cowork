@@ -97,7 +97,7 @@ export function FileCanvas({ client, project, sessionId }: Props) {
             <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
           </button>
         </div>
-        {listOpen && (
+        {listOpen ? (
           <div className="overflow-y-auto">
             {files.length === 0 ? (
               <div className="px-3 py-3 text-xs text-[var(--dls-text-secondary)]">No files yet.</div>
@@ -127,7 +127,21 @@ export function FileCanvas({ client, project, sessionId }: Props) {
               })
             )}
           </div>
-        )}
+        ) : selected ? (
+          <button
+            type="button"
+            onClick={() => setListOpen(true)}
+            className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 bg-[rgba(var(--dls-accent-rgb),0.08)] text-[var(--dls-accent)]"
+          >
+            <span className="text-[var(--dls-text-secondary)]">
+              {selected.kind === "dir" ? "\ud83d\udcc1" : "\ud83d\udcc4"}
+            </span>
+            <span className="truncate">{selected.name}</span>
+            <span className="ml-auto text-[10px] text-[var(--dls-text-secondary)] shrink-0">
+              {selected.scope === "scratch" ? "scratch" : "project"}
+            </span>
+          </button>
+        ) : null}
       </div>
 
       {/* Viewer */}
