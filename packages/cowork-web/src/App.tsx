@@ -65,7 +65,10 @@ function App({ baseUrl, token }: AppProps = {}) {
   const handleDeleteProject = async (slug: string) => {
     try {
       await client.deleteProject(slug);
-      if (slug === project) reset();
+      if (slug === project) {
+        reset();
+        setProject(null);
+      }
     } catch (e) {
       console.error("[cowork] delete project failed:", e);
     }

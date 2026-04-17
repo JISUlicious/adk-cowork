@@ -85,6 +85,16 @@ export function useChat(client: CoworkClient) {
         if (!loc) continue;
         const [mi, ti] = loc;
         const result = (fr.response ?? {}) as Record<string, unknown>;
+        const newStatus = result.confirmation_required
+          ? ("confirmation" as const)
+          : result.error
+            ? ("error" as const)
+            : ("ok" as const);
+        // Keep pendingRef in sync so the next assistant snapshot uses the right status.
+        if (pendingRef.current?.toolCalls[ti]) {
+          pendingRef.current.toolCalls[ti].result = result;
+          pendingRef.current.toolCalls[ti].status = newStatus;
+        }
         setMessagesSync((prev) => {
           const next = [...prev];
           const msg = next[mi];
@@ -93,9 +103,7 @@ export function useChat(client: CoworkClient) {
           const tc = tcs[ti];
           if (!tc) return prev;
           tc.result = result;
-          if (result.confirmation_required) tc.status = "confirmation";
-          else if (result.error) tc.status = "error";
-          else tc.status = "ok";
+          tc.status = newStatus;
           next[mi] = { ...msg, toolCalls: tcs };
           return next;
         });
