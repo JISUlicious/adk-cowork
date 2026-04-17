@@ -62,7 +62,7 @@ function PreviewFetcher({
   }
   if (data === null) {
     return (
-      <div className="p-4 text-gray-400 text-sm animate-pulse">Loading...</div>
+      <div className="p-4 text-[var(--dls-text-secondary)] text-sm animate-pulse">Loading...</div>
     );
   }
 
@@ -128,13 +128,13 @@ function JsonPreview({ data, ext }: { data: unknown; ext: string }) {
     };
     return (
       <div className="p-4 text-sm space-y-4">
-        <div className="text-xs text-gray-400">
+        <div className="text-xs text-[var(--dls-text-secondary)]">
           {pdf.page_count} page{pdf.page_count !== 1 ? "s" : ""}
           {pdf.metadata.title && ` \u2014 ${pdf.metadata.title}`}
         </div>
         {pdf.pages.map((p) => (
-          <div key={p.page} className="border-b pb-2 border-gray-100 dark:border-gray-800">
-            <div className="text-[10px] text-gray-400 mb-1">Page {p.page}</div>
+          <div key={p.page} className="border-b pb-2 border-[var(--dls-border)]">
+            <div className="text-[10px] text-[var(--dls-text-secondary)] mb-1">Page {p.page}</div>
             <div className="whitespace-pre-wrap">{p.text}</div>
           </div>
         ))}
@@ -153,7 +153,7 @@ function JsonPreview({ data, ext }: { data: unknown; ext: string }) {
           return (
             <div key={si} className="mb-4">
               {sheet.name && (
-                <div className="text-xs text-gray-400 mb-1 px-1">
+                <div className="text-xs text-[var(--dls-text-secondary)] mb-1 px-1">
                   {sheet.name}
                 </div>
               )}
@@ -164,7 +164,7 @@ function JsonPreview({ data, ext }: { data: unknown; ext: string }) {
                       {schema.map((h: string, j: number) => (
                         <th
                           key={j}
-                          className="border border-gray-200 dark:border-gray-700 px-2 py-1 bg-gray-50 dark:bg-gray-800 text-left font-medium"
+                          className="border border-[var(--dls-border)] px-2 py-1 bg-[var(--dls-hover)] text-left font-medium"
                         >
                           {h}
                         </th>
@@ -178,7 +178,7 @@ function JsonPreview({ data, ext }: { data: unknown; ext: string }) {
                       {(row as unknown[]).map((cell: unknown, ci: number) => (
                         <td
                           key={ci}
-                          className="border border-gray-200 dark:border-gray-700 px-2 py-1"
+                          className="border border-[var(--dls-border)] px-2 py-1"
                         >
                           {cell != null ? String(cell) : ""}
                         </td>
@@ -188,7 +188,7 @@ function JsonPreview({ data, ext }: { data: unknown; ext: string }) {
                 </tbody>
               </table>
               {rows.length > 200 && (
-                <div className="text-[10px] text-gray-400 mt-1 px-1">
+                <div className="text-[10px] text-[var(--dls-text-secondary)] mt-1 px-1">
                   Showing 200 of {rows.length} rows
                 </div>
               )}
@@ -204,7 +204,7 @@ function JsonPreview({ data, ext }: { data: unknown; ext: string }) {
 
 function CodeBlock({ content }: { content: string }) {
   return (
-    <pre className="p-4 text-xs font-mono whitespace-pre-wrap overflow-auto text-gray-700 dark:text-gray-300">
+    <pre className="p-4 text-xs font-mono whitespace-pre-wrap overflow-auto text-[var(--dls-text-primary)]">
       {content}
     </pre>
   );

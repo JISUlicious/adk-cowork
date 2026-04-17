@@ -42,7 +42,7 @@ export function ToolCallCard({ entry, onApprove, onDeny }: Props) {
       >
         <span>{STATUS_ICON[entry.status] || ""}</span>
         <span className="font-semibold">{entry.name}</span>
-        <span className="text-gray-400 ml-auto">
+        <span className="text-[var(--dls-text-secondary)] ml-auto">
           {expanded ? "\u25b2" : "\u25bc"}
         </span>
       </div>
@@ -90,14 +90,14 @@ export function ToolCallCard({ entry, onApprove, onDeny }: Props) {
         <div className="mt-2 space-y-1 text-[11px]">
           {Object.entries(entry.args).map(([k, v]) => (
             <div key={k} className="flex gap-2">
-              <span className="text-gray-500 shrink-0">{k}:</span>
-              <span className="break-all text-gray-700 dark:text-gray-300">
+              <span className="text-[var(--dls-text-secondary)] shrink-0">{k}:</span>
+              <span className="break-all text-[var(--dls-text-primary)]">
                 {truncate(String(v), 300)}
               </span>
             </div>
           ))}
           {entry.result && (
-            <div className="mt-1 pt-1 border-t border-gray-200 dark:border-gray-600">
+            <div className="mt-1 pt-1 border-t border-[var(--dls-border)]">
               {entry.result.error ? (
                 <span className="text-red-600">
                   {String(entry.result.error)}
@@ -122,7 +122,7 @@ function ResultPreview({ result }: { result: Record<string, unknown> }) {
     result.content || result.text || result.stdout || result.output;
   if (typeof content === "string" && content) {
     return (
-      <pre className="whitespace-pre-wrap text-gray-600 dark:text-gray-400 max-h-32 overflow-y-auto">
+      <pre className="whitespace-pre-wrap text-[var(--dls-text-secondary)] max-h-32 overflow-y-auto">
         {truncate(content, 500)}
       </pre>
     );
@@ -130,7 +130,7 @@ function ResultPreview({ result }: { result: Record<string, unknown> }) {
   // Compact JSON for other results
   const json = JSON.stringify(result, null, 2);
   return (
-    <pre className="whitespace-pre-wrap text-gray-600 dark:text-gray-400 max-h-32 overflow-y-auto">
+    <pre className="whitespace-pre-wrap text-[var(--dls-text-secondary)] max-h-32 overflow-y-auto">
       {truncate(json, 500)}
     </pre>
   );
