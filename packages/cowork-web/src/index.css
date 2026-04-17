@@ -37,6 +37,42 @@
   --dls-card-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
 }
 
+/* inline code: background pill in both themes */
+.prose code:not(pre code) {
+  background: rgba(0 0 0 / 0.06);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+/* prose dark-theme overrides — mirrors prose-invert using our design tokens */
+[data-theme="dark"] .prose {
+  --tw-prose-body: var(--dls-text-primary);
+  --tw-prose-headings: var(--dls-text-primary);
+  --tw-prose-lead: var(--dls-text-secondary);
+  --tw-prose-bold: var(--dls-text-primary);
+  --tw-prose-code: #e2e8f0;
+  --tw-prose-pre-code: #e2e8f0;
+  --tw-prose-pre-bg: #1e2737;
+  --tw-prose-links: #60a5fa;
+  --tw-prose-captions: var(--dls-text-secondary);
+  --tw-prose-quotes: var(--dls-text-secondary);
+  --tw-prose-quote-borders: var(--dls-border);
+  --tw-prose-counters: var(--dls-text-secondary);
+  --tw-prose-bullets: var(--dls-text-secondary);
+  --tw-prose-hr: var(--dls-border);
+  --tw-prose-th-borders: var(--dls-border);
+  --tw-prose-td-borders: var(--dls-border);
+  color: var(--dls-text-primary);
+}
+
+/* inline code: subtle dark background + light text */
+[data-theme="dark"] .prose code:not(pre code) {
+  background: rgba(255 255 255 / 0.08);
+  color: #e2e8f0;
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
 html,
 body {
   height: 100%;

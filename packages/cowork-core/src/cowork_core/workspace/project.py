@@ -96,6 +96,7 @@ class ProjectRegistryBase(Protocol):
     def get_or_create(self, name: str) -> Project: ...
     def new_session(self, project_slug: str, title: str | None = None) -> Session: ...
     def get_session(self, project_slug: str, session_id: str) -> Session: ...
+    def delete_session(self, project_slug: str, session_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,17 @@ class ProjectRegistry:
             created_at=data["created_at"],
             title=data.get("title") or None,
         )
+
+    def delete_session(self, project_slug: str, session_id: str) -> None:
+        """Remove a session directory entirely."""
+        import shutil
+
+        project = self.get(project_slug)
+        root = project.sessions_dir / session_id
+        toml_path = root / "session.toml"
+        if not toml_path.exists():
+            raise FileNotFoundError(f"no session {session_id} in {project_slug}")
+        shutil.rmtree(root)
 
     def promote(self, session: Session, rel_path: str | Path) -> Path:
         """Move ``rel_path`` (relative to session scratch) into project files."""

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CoworkClient } from "../transport/client";
 import type { ProjectInfo, SessionListItem } from "../transport/types";
-import { Plus, RefreshCw, MessageSquarePlus, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, MessageSquarePlus, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 
 interface Props {
   client: CoworkClient;
@@ -10,6 +10,7 @@ interface Props {
   onSelectProject: (slug: string) => void;
   onSelectSession: (sessionId: string) => void;
   onNewSession: () => void;
+  onDeleteSession: (sessionId: string) => Promise<void>;
 }
 
 export function Sidebar({
@@ -19,6 +20,7 @@ export function Sidebar({
   onSelectProject,
   onSelectSession,
   onNewSession,
+  onDeleteSession,
 }: Props) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
@@ -26,6 +28,7 @@ export function Sidebar({
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -41,7 +44,9 @@ export function Sidebar({
       return;
     }
     try {
-      setSessions(await client.listSessions(project));
+      const list = await client.listSessions(project);
+      list.sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+      setSessions(list);
     } catch {
       setSessions([]);
     }
@@ -75,17 +80,20 @@ export function Sidebar({
     }
   };
 
-  const sessionLabel = (s: SessionListItem) => {
+  const sessionLabel = (s: SessionListItem, idx: number) => {
     if (s.title) return s.title;
-    const date = s.created_at
-      ? new Date(s.created_at).toLocaleString(undefined, {
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : s.id.slice(0, 8);
-    return date;
+    if (s.created_at) {
+      const d = new Date(s.created_at);
+      const now = new Date();
+      const diffMs = now.getTime() - d.getTime();
+      const diffMin = Math.floor(diffMs / 60000);
+      if (diffMin < 1) return "Just now";
+      if (diffMin < 60) return `${diffMin}m ago`;
+      const diffHr = Math.floor(diffMin / 60);
+      if (diffHr < 24) return `${diffHr}h ago`;
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+    return `Session ${idx + 1}`;
   };
 
   const selectedProject = projects.find((p) => p.slug === project);
@@ -148,23 +156,63 @@ export function Sidebar({
                           No sessions yet
                         </div>
                       ) : (
-                        sessions.map((s) => {
+                        sessions.map((s, i) => {
                           const isActive = s.id === sessionId;
+                          const isPendingDelete = confirmDeleteId === s.id;
                           return (
-                            <button
-                              key={s.id}
-                              type="button"
-                              className={`group flex min-h-8 w-full items-center rounded-xl px-3 py-1.5 text-left text-[13px] transition-colors ${
-                                isActive
-                                  ? "bg-[var(--dls-active)] text-[var(--dls-text-primary)] font-medium"
-                                  : "text-[var(--dls-text-secondary)] hover:bg-[var(--dls-hover)] hover:text-[var(--dls-text-primary)]"
-                              }`}
-                              onClick={() => onSelectSession(s.id)}
-                            >
-                              <span className="min-w-0 truncate">
-                                {sessionLabel(s)}
-                              </span>
-                            </button>
+                            <div key={s.id} className="flex flex-col">
+                              <div
+                                className={`group flex min-h-8 w-full items-center rounded-xl text-left text-[13px] transition-colors ${
+                                  isActive
+                                    ? "bg-[var(--dls-active)] text-[var(--dls-text-primary)] font-medium"
+                                    : "text-[var(--dls-text-secondary)] hover:bg-[var(--dls-hover)] hover:text-[var(--dls-text-primary)]"
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  className="min-w-0 flex-1 truncate px-3 py-1.5 text-left"
+                                  onClick={() => { setConfirmDeleteId(null); onSelectSession(s.id); }}
+                                >
+                                  {sessionLabel(s, i)}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="mr-1 shrink-0 rounded-md p-1 opacity-0 transition-opacity group-hover:opacity-100 text-[var(--dls-text-secondary)] hover:text-red-500"
+                                  title="Delete session"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmDeleteId(isPendingDelete ? null : s.id);
+                                  }}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                              {isPendingDelete && (
+                                <div className="mx-1 mb-1 flex items-center justify-between rounded-xl bg-red-500/10 px-3 py-1.5 text-[11px]">
+                                  <span className="text-red-500">Delete?</span>
+                                  <div className="flex gap-1">
+                                    <button
+                                      type="button"
+                                      className="rounded-md px-2 py-0.5 text-[var(--dls-text-secondary)] hover:bg-[var(--dls-hover)]"
+                                      onClick={() => setConfirmDeleteId(null)}
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="rounded-md bg-red-500 px-2 py-0.5 text-white hover:bg-red-600"
+                                      onClick={async () => {
+                                        setConfirmDeleteId(null);
+                                        await onDeleteSession(s.id);
+                                        await refreshSessions();
+                                      }}
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           );
                         })
                       )}

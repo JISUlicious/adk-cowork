@@ -1,5 +1,23 @@
 import { useEffect, useState } from "react";
 import { CoworkClient } from "../transport/client";
+import { subscribeToSystemTheme } from "../theme";
+
+function useIsDark(): boolean {
+  const [dark, setDark] = useState(
+    () => document.documentElement.dataset.theme === "dark",
+  );
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setDark(document.documentElement.dataset.theme === "dark");
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    const unsub = subscribeToSystemTheme(() => {
+      setDark(document.documentElement.dataset.theme === "dark");
+    });
+    return () => { observer.disconnect(); unsub(); };
+  }, []);
+  return dark;
+}
 
 interface Props {
   client: CoworkClient;
@@ -26,15 +44,37 @@ export function FileViewer({ client, project, path, name }: Props) {
   }
 
   // Everything else: fetch from preview endpoint
-  return <PreviewFetcher url={url} ext={ext} />;
+  const isDark = useIsDark();
+  return <PreviewFetcher url={url} ext={ext} isDark={isDark} />;
+}
+
+const DARK_OVERRIDE =
+  `<style>body{background:#0b0f17!important;color:#e5e7eb!important}` +
+  `pre,code{background:#1f2937!important;color:#e5e7eb!important}` +
+  `a{color:#60a5fa!important}` +
+  `blockquote{border-left-color:#374151!important;color:#9ca3af!important}` +
+  `hr,th,td{border-color:#374151!important}</style>`;
+
+const LIGHT_OVERRIDE =
+  `<style>body{background:#fff!important;color:#111!important}` +
+  `pre,code{background:#f4f4f4!important;color:#111!important}` +
+  `a{color:#2563eb!important}</style>`;
+
+function injectTheme(html: string, isDark: boolean): string {
+  const tag = isDark ? DARK_OVERRIDE : LIGHT_OVERRIDE;
+  const idx = html.indexOf("</head>");
+  if (idx !== -1) return html.slice(0, idx) + tag + html.slice(idx);
+  return tag + html;
 }
 
 function PreviewFetcher({
   url,
   ext,
+  isDark,
 }: {
   url: string;
   ext: string;
+  isDark: boolean;
 }) {
   const [data, setData] = useState<string | null>(null);
   const [contentType, setContentType] = useState("");
@@ -66,14 +106,13 @@ function PreviewFetcher({
     );
   }
 
-  // HTML preview (markdown). Render in a sandboxed iframe so the
-  // converter's <style> rules (which target `body`) don't leak into
-  // the host page and squish the whole UI.
+  // HTML preview (markdown). Inject the current theme before rendering in
+  // the sandboxed iframe so it follows the app theme, not the OS preference.
   if (contentType.includes("text/html")) {
     return (
       <iframe
         title="preview"
-        srcDoc={data}
+        srcDoc={injectTheme(data, isDark)}
         sandbox=""
         className="w-full h-full min-h-[60vh] border-0"
       />

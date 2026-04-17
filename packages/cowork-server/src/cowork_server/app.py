@@ -273,6 +273,18 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 })
         return result
 
+    @app.delete("/v1/projects/{project}/sessions/{session_id}")
+    async def delete_session(
+        project: str,
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        try:
+            runtime.projects.delete_session(project, session_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"status": "deleted"}
+
     # ── Files ──────────────────────────────────────────────────────────
 
     @app.get("/v1/projects/{project}/files/{path:path}")

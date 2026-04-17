@@ -25,11 +25,31 @@ function newAssistant(): ChatMessage {
 export function useChat(client: CoworkClient) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const messagesRef = useRef<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionRef = useRef<string | null>(null);
   const pendingRef = useRef<ChatMessage | null>(null);
   // id → (message-index, toolCalls-index)
   const toolMapRef = useRef<Map<string, [number, number]>>(new Map());
+
+  const setMessagesSync = useCallback((msgs: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+    setMessages((prev) => {
+      const next = typeof msgs === "function" ? msgs(prev) : msgs;
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const setSendingSync = useCallback((value: boolean) => {
+    sendingRef.current = value;
+    setSending(value);
+  }, []);
+
+  // Per-session state cache: preserves messages + sending across session switches
+  const sessionCacheRef = useRef<
+    Map<string, { messages: ChatMessage[]; sending: boolean; pending: ChatMessage | null; toolMap: Map<string, [number, number]> }>
+  >(new Map());
 
   /**
    * Fold one ADK event into the message timeline.
@@ -52,7 +72,7 @@ export function useChat(client: CoworkClient) {
 
     if (isUserTurn) {
       const text = parts.map((p) => p.text ?? "").join("");
-      setMessages((prev) => [
+      setMessagesSync((prev) => [
         ...prev,
         { role: "user", text, thought: "", toolCalls: [] },
       ]);
@@ -65,7 +85,7 @@ export function useChat(client: CoworkClient) {
         if (!loc) continue;
         const [mi, ti] = loc;
         const result = (fr.response ?? {}) as Record<string, unknown>;
-        setMessages((prev) => {
+        setMessagesSync((prev) => {
           const next = [...prev];
           const msg = next[mi];
           if (!msg) return prev;
@@ -112,7 +132,7 @@ export function useChat(client: CoworkClient) {
         toolCalls: pending.toolCalls.map((t) => ({ ...t })),
       };
 
-      setMessages((prev) => {
+      setMessagesSync((prev) => {
         const next = [...prev];
         const lastIdx = next.length - 1;
         const last = next[lastIdx];
@@ -133,7 +153,7 @@ export function useChat(client: CoworkClient) {
     }
 
     if (ev.errorMessage || ev.errorCode) {
-      setMessages((prev) => [
+      setMessagesSync((prev) => [
         ...prev,
         {
           role: "assistant",
@@ -146,12 +166,40 @@ export function useChat(client: CoworkClient) {
 
     if (ev.turnComplete) {
       pendingRef.current = null;
-      setSending(false);
+      setSendingSync(false);
       if (typeof document !== "undefined" && document.hidden) {
         void notify("Cowork", "Turn complete");
       }
     }
+  }, [setMessagesSync, setSendingSync]);
+
+  /** Save current session state into the cache before switching away. */
+  const saveCurrentSession = useCallback(() => {
+    const sid = sessionRef.current;
+    if (!sid) return;
+    sessionCacheRef.current.set(sid, {
+      messages: messagesRef.current,
+      sending: sendingRef.current,
+      pending: pendingRef.current,
+      toolMap: new Map(toolMapRef.current),
+    });
   }, []);
+
+  /** Restore cached session state, or reset to empty. */
+  const restoreSession = useCallback((sid: string) => {
+    const cached = sessionCacheRef.current.get(sid);
+    if (cached) {
+      setMessagesSync(cached.messages);
+      setSendingSync(cached.sending);
+      pendingRef.current = cached.pending;
+      toolMapRef.current = cached.toolMap;
+    } else {
+      setMessagesSync([]);
+      setSendingSync(false);
+      pendingRef.current = null;
+      toolMapRef.current = new Map();
+    }
+  }, [setMessagesSync, setSendingSync]);
 
   const connectSession = useCallback(
     (sid: string) => {
@@ -175,25 +223,33 @@ export function useChat(client: CoworkClient) {
 
   const resumeSession = useCallback(
     async (existingSessionId: string, project: string) => {
+      // Save current session state before switching
+      saveCurrentSession();
+
+      // Check if we have a cached version of the target session
+      const cached = sessionCacheRef.current.get(existingSessionId);
+      if (cached) {
+        restoreSession(existingSessionId);
+        connectSession(existingSessionId);
+        return;
+      }
+
       try {
         const info = await client.resumeSession(existingSessionId, project);
-        setMessages([]);
+        setMessagesSync([]);
         pendingRef.current = null;
-        toolMapRef.current.clear();
+        toolMapRef.current = new Map();
         try {
           const events = await client.getHistory(info.session_id);
           for (const ev of events) handleEvent(ev);
-          // Replayed events are historical — never leave sending=true or
-          // a pending assistant message open just because the last
-          // recorded event lacked turnComplete.
           pendingRef.current = null;
-          setSending(false);
+          setSendingSync(false);
         } catch {
           /* history unavailable — start clean */
         }
         connectSession(info.session_id);
       } catch (e) {
-        setMessages((prev) => [
+        setMessagesSync((prev) => [
           ...prev,
           {
             role: "assistant",
@@ -204,23 +260,23 @@ export function useChat(client: CoworkClient) {
         ]);
       }
     },
-    [client, connectSession, handleEvent],
+    [client, connectSession, handleEvent, saveCurrentSession, restoreSession],
   );
 
   const send = useCallback(
     async (text: string, project?: string) => {
       if (!text.trim() || sending) return;
-      setMessages((prev) => [
+      setMessagesSync((prev) => [
         ...prev,
         { role: "user", text, thought: "", toolCalls: [] },
       ]);
-      setSending(true);
+      setSendingSync(true);
       try {
         const sid = await ensureSession(project);
         await client.sendMessage(sid, text);
       } catch (e) {
-        setSending(false);
-        setMessages((prev) => [
+        setSendingSync(false);
+        setMessagesSync((prev) => [
           ...prev,
           {
             role: "assistant",
@@ -231,7 +287,7 @@ export function useChat(client: CoworkClient) {
         ]);
       }
     },
-    [client, sending, ensureSession],
+    [client, sending, ensureSession, setMessagesSync, setSendingSync],
   );
 
   const reset = useCallback(() => {
@@ -240,30 +296,31 @@ export function useChat(client: CoworkClient) {
     setSessionId(null);
     pendingRef.current = null;
     toolMapRef.current.clear();
-    setMessages([]);
-    setSending(false);
-  }, [client]);
+    setMessagesSync([]);
+    setSendingSync(false);
+  }, [client, setMessagesSync, setSendingSync]);
 
   const newSession = useCallback(
     async (project?: string) => {
+      saveCurrentSession();
       client.disconnect();
       sessionRef.current = null;
       setSessionId(null);
       pendingRef.current = null;
-      toolMapRef.current.clear();
-      setMessages([]);
-      setSending(false);
+      toolMapRef.current = new Map();
+      setMessagesSync([]);
+      setSendingSync(false);
       try {
         const info = await client.createSession(project);
         connectSession(info.session_id);
       } catch (e) {
-        setMessages((prev) => [
+        setMessagesSync((prev) => [
           ...prev,
           { role: "assistant", text: `Failed to create session: ${e}`, thought: "", toolCalls: [] },
         ]);
       }
     },
-    [client, connectSession],
+    [client, connectSession, saveCurrentSession, setMessagesSync, setSendingSync],
   );
 
   return { messages, sending, send, reset, newSession, resumeSession, sessionId };

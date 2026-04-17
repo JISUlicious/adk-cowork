@@ -72,6 +72,16 @@ export class CoworkClient {
     return r.json();
   }
 
+  async deleteSession(projectSlug: string, sessionId: string): Promise<void> {
+    const h: Record<string, string> = {};
+    if (this.token) h["x-cowork-token"] = this.token;
+    const r = await fetch(
+      `${this.baseUrl}/v1/projects/${projectSlug}/sessions/${sessionId}`,
+      { method: "DELETE", headers: h },
+    );
+    if (!r.ok) throw new Error(`deleteSession: ${r.status}`);
+  }
+
   async getPolicyMode(): Promise<string> {
     const r = await fetch(`${this.baseUrl}/v1/policy/mode`, {
       headers: this.headers(),
