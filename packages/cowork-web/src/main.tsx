@@ -2,7 +2,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
+import { bootstrapTheme } from "./theme";
 import { getServerFromTauri, isTauri } from "./transport/tauri";
+
+bootstrapTheme();
 
 async function bootstrap() {
   let baseUrl: string | undefined;
