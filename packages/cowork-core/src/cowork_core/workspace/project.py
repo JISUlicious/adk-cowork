@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from typing import Protocol, runtime_checkable
+
 from cowork_core.workspace.workspace import Workspace, WorkspaceError
 
 _SLUG_RE = re.compile(r"[^a-z0-9_-]+")
@@ -78,6 +80,22 @@ class Session:
     @property
     def toml_path(self) -> Path:
         return self.root / "session.toml"
+
+
+@runtime_checkable
+class ProjectRegistryBase(Protocol):
+    """Abstract interface for project/session storage.
+
+    Enables swapping the filesystem-backed ``ProjectRegistry`` for a
+    database-backed implementation without changing callers.
+    """
+
+    def list(self) -> list[Project]: ...
+    def create(self, name: str) -> Project: ...
+    def get(self, slug: str) -> Project: ...
+    def get_or_create(self, name: str) -> Project: ...
+    def new_session(self, project_slug: str, title: str | None = None) -> Session: ...
+    def get_session(self, project_slug: str, session_id: str) -> Session: ...
 
 
 @dataclass(frozen=True)

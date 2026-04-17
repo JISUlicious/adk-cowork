@@ -7,8 +7,12 @@ subdirectories; see ``SPEC.md`` §2.11.1 for the layout.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cowork_core.workspace.storage import FileStorage, LocalFileStorage
 
 
 class WorkspaceError(Exception):
@@ -18,9 +22,14 @@ class WorkspaceError(Exception):
 @dataclass(frozen=True)
 class Workspace:
     root: Path
+    storage: FileStorage | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
+        # Lazily attach a LocalFileStorage if none provided
+        if self.storage is None:
+            from cowork_core.workspace.storage import LocalFileStorage
+            object.__setattr__(self, "storage", LocalFileStorage(self.root))
 
     def resolve(self, rel: str | Path) -> Path:
         candidate = (self.root / rel).resolve()

@@ -79,11 +79,24 @@ class SearchConfig(BaseModel):
     provider: Literal["duckduckgo", "brave", "tavily", "searxng"] = "duckduckgo"
 
 
+class AuthConfig(BaseModel):
+    """Authentication configuration.
+
+    - ``token``: explicit token for sidecar mode (generated if empty).
+    - ``keys``: dict of ``api_key → user_label`` for multi-user mode.
+      When non-empty, each key identifies a distinct user.
+    """
+
+    token: str = ""
+    keys: dict[str, str] = Field(default_factory=dict)
+
+
 class CoworkConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
