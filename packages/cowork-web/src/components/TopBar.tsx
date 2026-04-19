@@ -32,6 +32,7 @@ export function TopBar({
   onToggleSidebar,
 }: Props) {
   const [policyMode, setPolicyMode] = useState("work");
+  const [pythonExec, setPythonExec] = useState<string>("confirm");
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialThemeMode);
 
   useEffect(() => {
@@ -40,9 +41,17 @@ export function TopBar({
     });
   }, [themeMode]);
 
+  // Refresh the mode displayed in the dropdown whenever the active
+  // session changes. Without a session, fall back to the server-wide
+  // default so the UI shows a sensible pre-session value.
   useEffect(() => {
-    client.getPolicyMode().then(setPolicyMode).catch(() => {});
-  }, [client]);
+    if (sessionId) {
+      client.getSessionPolicyMode(sessionId).then(setPolicyMode).catch(() => {});
+      client.getSessionPythonExec(sessionId).then(setPythonExec).catch(() => {});
+    } else {
+      client.getPolicyMode().then(setPolicyMode).catch(() => {});
+    }
+  }, [client, sessionId]);
 
   const cycleTheme = () => {
     const idx = THEME_CYCLE.indexOf(themeMode);
@@ -80,24 +89,66 @@ export function TopBar({
       </div>
 
       <div className="flex items-center gap-1.5">
-        {/* Policy mode */}
+        {/* Policy mode — per-session when a session is active, otherwise
+            the read-only server default is shown and the dropdown is a
+            no-op because there's nothing to mutate yet. */}
         <select
           value={policyMode}
+          disabled={!sessionId}
           onChange={async (e) => {
+            if (!sessionId) return;
+            const previous = policyMode;
             const mode = e.target.value;
+            setPolicyMode(mode); // optimistic
             try {
-              const confirmed = await client.setPolicyMode(mode);
+              const confirmed = await client.setSessionPolicyMode(
+                sessionId,
+                mode,
+              );
               setPolicyMode(confirmed);
             } catch {
-              /* revert on failure */
+              setPolicyMode(previous);
             }
           }}
-          className={`rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors focus:outline-none ${policyModeClass(policyMode)}`}
-          title="Policy mode"
+          className={`rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors focus:outline-none disabled:opacity-60 ${policyModeClass(policyMode)}`}
+          title={
+            sessionId
+              ? "Policy mode (applies to this session)"
+              : "Server default policy — pick or open a session to change it"
+          }
         >
           <option value="plan">Plan</option>
           <option value="work">Work</option>
           <option value="auto">Auto</option>
+        </select>
+
+        {/* Python exec policy — only meaningful in Work mode (Plan blocks
+            all writes; Auto skips this gate). Show the current value
+            regardless so the user sees what's in effect. */}
+        <select
+          value={pythonExec}
+          disabled={!sessionId}
+          onChange={async (e) => {
+            if (!sessionId) return;
+            const previous = pythonExec;
+            const next = e.target.value as "confirm" | "allow" | "deny";
+            setPythonExec(next);
+            try {
+              const confirmed = await client.setSessionPythonExec(
+                sessionId,
+                next,
+              );
+              setPythonExec(confirmed);
+            } catch {
+              setPythonExec(previous);
+            }
+          }}
+          className={`rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors focus:outline-none disabled:opacity-60 ${pythonExecClass(pythonExec)}`}
+          title="python_exec_run policy for this session"
+        >
+          <option value="confirm">py: confirm</option>
+          <option value="allow">py: allow</option>
+          <option value="deny">py: deny</option>
         </select>
 
         <div className="h-4 w-px bg-[var(--dls-border)]" />
@@ -124,5 +175,17 @@ function policyModeClass(mode: string): string {
       return "border border-amber-400/50 bg-amber-500/10 text-amber-600 dark:text-amber-400";
     default:
       return "border border-green-400/50 bg-green-500/10 text-green-600 dark:text-green-400";
+  }
+}
+
+function pythonExecClass(policy: string): string {
+  switch (policy) {
+    case "allow":
+      return "border border-amber-400/50 bg-amber-500/10 text-amber-600 dark:text-amber-400";
+    case "deny":
+      return "border border-red-400/50 bg-red-500/10 text-red-600 dark:text-red-400";
+    default:
+      // confirm
+      return "border border-[var(--dls-border)] bg-[var(--dls-app-bg)] text-[var(--dls-text-secondary)]";
   }
 }

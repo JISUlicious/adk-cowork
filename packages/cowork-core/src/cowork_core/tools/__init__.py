@@ -16,6 +16,10 @@ from __future__ import annotations
 
 from cowork_core.tools.base import (
     COWORK_CONTEXT_KEY,
+    COWORK_POLICY_MODE_KEY,
+    COWORK_PYTHON_EXEC_KEY,
+    COWORK_READS_KEY,
+    COWORK_TOOL_APPROVALS_KEY,
     CoworkToolContext,
     get_cowork_context,
 )
@@ -23,6 +27,10 @@ from cowork_core.tools.registry import ToolRegistry
 
 __all__ = [
     "COWORK_CONTEXT_KEY",
+    "COWORK_POLICY_MODE_KEY",
+    "COWORK_PYTHON_EXEC_KEY",
+    "COWORK_READS_KEY",
+    "COWORK_TOOL_APPROVALS_KEY",
     "CoworkToolContext",
     "ToolRegistry",
     "get_cowork_context",

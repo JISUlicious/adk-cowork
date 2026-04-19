@@ -74,7 +74,7 @@ def python_exec_run(
         return {"error": "code must be a non-empty string"}
     ctx = get_cowork_context(tool_context)
     timeout_sec = max(1, min(int(timeout_sec), 600))
-    scratch: Path = ctx.session.scratch_dir
+    scratch: Path = ctx.env.scratch_dir()
     scratch.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile(

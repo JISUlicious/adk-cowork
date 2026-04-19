@@ -48,6 +48,24 @@ class PolicyConfig(BaseModel):
     mode: Literal["plan", "work", "auto"] = "work"
     shell_allowlist: list[str] = Field(default_factory=lambda: ["git", "python"])
     email_send: Literal["confirm", "deny"] = "confirm"
+    # Python snippets can read and write anywhere the host process can —
+    # path confinement does NOT apply to `python_exec_run`. Default to
+    # "confirm" so the agent can't silently exfiltrate files outside the
+    # workdir (e.g. `open('/etc/passwd').read()`).
+    python_exec: Literal["confirm", "allow", "deny"] = "confirm"
+
+
+class RuntimeConfig(BaseModel):
+    """Selects which session/bus/limiter implementations ``build_runtime`` wires.
+
+    ``local`` (default) — single-process in-memory bus + SQLite session store.
+    Suitable for desktop sidecar and small-team web.
+
+    ``distributed`` — reserved for future Redis+Postgres backends. Not yet
+    implemented; ``build_runtime`` will raise if selected today.
+    """
+
+    backend: Literal["local", "distributed"] = "local"
 
 
 class McpServerConfig(BaseModel):
@@ -96,6 +114,7 @@ class CoworkConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)

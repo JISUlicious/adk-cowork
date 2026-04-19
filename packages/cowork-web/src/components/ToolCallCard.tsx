@@ -1,10 +1,11 @@
 import { useState } from "react";
 import type { ToolCallEntry } from "../hooks/useChat";
+import { renderToolWidget } from "./ToolWidgets";
 
 interface Props {
   entry: ToolCallEntry;
-  onApprove?: (summary: string) => void;
-  onDeny?: (summary: string) => void;
+  onApprove?: (toolName: string, summary: string) => void | Promise<void>;
+  onDeny?: (toolName: string, summary: string) => void;
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -66,7 +67,7 @@ export function ToolCallCard({ entry, onApprove, onDeny }: Props) {
               onClick={(e) => {
                 e.stopPropagation();
                 setDecided(true);
-                onApprove?.(summary);
+                void onApprove?.(entry.name, summary);
               }}
               className="px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700 font-medium"
             >
@@ -76,7 +77,7 @@ export function ToolCallCard({ entry, onApprove, onDeny }: Props) {
               onClick={(e) => {
                 e.stopPropagation();
                 setDecided(true);
-                onDeny?.(summary);
+                onDeny?.(entry.name, summary);
               }}
               className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700 font-medium"
             >
@@ -88,29 +89,42 @@ export function ToolCallCard({ entry, onApprove, onDeny }: Props) {
 
       {expanded && (
         <div className="mt-2 space-y-1 text-[11px]">
-          {Object.entries(entry.args).map(([k, v]) => (
-            <div key={k} className="flex gap-2">
-              <span className="text-[var(--dls-text-secondary)] shrink-0">{k}:</span>
-              <span className="break-all text-[var(--dls-text-primary)]">
-                {truncate(String(v), 300)}
-              </span>
-            </div>
-          ))}
-          {entry.result && (
-            <div className="mt-1 pt-1 border-t border-[var(--dls-border)]">
-              {entry.result.error ? (
-                <span className="text-red-600">
-                  {String(entry.result.error)}
-                </span>
-              ) : entry.result.confirmation_required ? (
-                <span className="text-amber-600">
-                  {decided ? "Waiting for response..." : "Awaiting your decision"}
-                </span>
-              ) : (
-                <ResultPreview result={entry.result} />
-              )}
-            </div>
-          )}
+          {(() => {
+            // Prefer a typed per-tool widget when one exists. Errors and
+            // confirmation-required cases always fall through to the generic
+            // view below so the banners still show.
+            const widget = renderToolWidget(entry);
+            if (widget) return widget;
+            return (
+              <>
+                {Object.entries(entry.args).map(([k, v]) => (
+                  <div key={k} className="flex gap-2">
+                    <span className="text-[var(--dls-text-secondary)] shrink-0">
+                      {k}:
+                    </span>
+                    <span className="break-all text-[var(--dls-text-primary)]">
+                      {truncate(String(v), 300)}
+                    </span>
+                  </div>
+                ))}
+                {entry.result && (
+                  <div className="mt-1 pt-1 border-t border-[var(--dls-border)]">
+                    {entry.result.error ? (
+                      <span className="text-red-600">
+                        {String(entry.result.error)}
+                      </span>
+                    ) : entry.result.confirmation_required ? (
+                      <span className="text-amber-600">
+                        {decided ? "Waiting for response..." : "Awaiting your decision"}
+                      </span>
+                    ) : (
+                      <ResultPreview result={entry.result} />
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
     </div>

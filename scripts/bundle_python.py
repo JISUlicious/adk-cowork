@@ -133,6 +133,61 @@ def verify(bundle_root: Path, triple: str) -> None:
     subprocess.run([str(py), "-c", probe], check=True)
 
 
+def check_no_empty_files(bundle_root: Path) -> None:
+    """Abort if files that MUST have content are 0 bytes.
+
+    CPython and pep-compliant packages legitimately ship empty files —
+    namespace ``__init__.py``, PEP 561 ``py.typed`` markers,
+    ``.dist-info/REQUESTED``, etc. — so a blanket 0-byte sweep trips
+    false positives constantly. We check only the files whose emptiness
+    would silently break the bundle:
+
+    * binaries in ``bin/`` (and ``python.exe`` on Windows)
+    * shared libraries (``.so`` / ``.dylib`` / ``.dll`` / ``.pyd``)
+    * editable-install ``.pth`` pointers (caused the real corruption
+      that motivated this check)
+    * dist-info ``METADATA`` and ``RECORD`` (ditto)
+    """
+    critical: list[Path] = []
+
+    bin_dir = bundle_root / "bin"
+    if bin_dir.is_dir():
+        critical.extend(
+            p for p in bin_dir.iterdir()
+            if p.is_file() and not p.is_symlink() and p.stat().st_size == 0
+        )
+    # Windows python.exe lives at the bundle root, not under bin/.
+    py_exe = bundle_root / "python.exe"
+    if py_exe.is_file() and py_exe.stat().st_size == 0:
+        critical.append(py_exe)
+
+    for suffix in (".so", ".dylib", ".dll", ".pyd"):
+        critical.extend(
+            p for p in bundle_root.rglob(f"*{suffix}")
+            if p.is_file() and p.stat().st_size == 0
+        )
+
+    for p in bundle_root.rglob("*.dist-info/METADATA"):
+        if p.is_file() and p.stat().st_size == 0:
+            critical.append(p)
+    for p in bundle_root.rglob("*.dist-info/RECORD"):
+        if p.is_file() and p.stat().st_size == 0:
+            critical.append(p)
+    for p in bundle_root.rglob("site-packages/_editable_impl_*.pth"):
+        if p.is_file() and p.stat().st_size == 0:
+            critical.append(p)
+
+    if critical:
+        preview = "\n  ".join(str(p.relative_to(bundle_root)) for p in critical[:10])
+        more = f"\n  …and {len(critical) - 10} more" if len(critical) > 10 else ""
+        raise SystemExit(
+            f"[abort] bundle at {bundle_root} contains {len(critical)} "
+            f"zero-byte critical file(s) — extraction or pip install was "
+            f"likely interrupted. Re-run with --clean. Examples:\n"
+            f"  {preview}{more}"
+        )
+
+
 def bundle(triple: str, editable: bool = False) -> Path:
     if triple not in TARGETS:
         raise SystemExit(f"unknown target triple: {triple}")
@@ -143,6 +198,7 @@ def bundle(triple: str, editable: bool = False) -> Path:
     bundle_root = RESOURCES_DIR / triple
     extract(archive, bundle_root)
     install_cowork(bundle_root, triple, editable=editable)
+    check_no_empty_files(bundle_root)
 
     # Only verify when the bundle matches the host — cross-compiled bundles
     # can't be executed on the current machine.

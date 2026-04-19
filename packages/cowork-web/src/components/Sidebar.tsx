@@ -99,8 +99,6 @@ export function Sidebar({
     return `Session ${idx + 1}`;
   };
 
-  const selectedProject = projects.find((p) => p.slug === project);
-
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {/* Project list */}

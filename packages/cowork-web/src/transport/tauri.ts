@@ -66,3 +66,46 @@ export async function openWorkspaceInFileManager(): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("open_workspace");
 }
+
+/** Native folder picker. Returns absolute path or ``null`` if cancelled. */
+export async function pickWorkdir(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    return (await invoke<string | null>("pick_workdir")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Last-picked workdir remembered for this launch (in-memory on the Rust side). */
+export async function getRecentWorkdir(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    return (await invoke<string | null>("recent_workdir")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setRecentWorkdir(path: string): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    await invoke("set_recent_workdir", { path });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Copy a dropped file into the current workdir (desktop mode).
+ *  Returns the destination absolute path, or throws. */
+export async function copyIntoWorkdir(
+  src: string,
+  workdir: string,
+): Promise<string> {
+  if (!isTauri()) throw new Error("copyIntoWorkdir: not in Tauri");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("copy_into_workdir", { src, workdir });
+}

@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from cowork_core.config import CoworkConfig, EmailConfig
+from cowork_core.execenv import ManagedExecEnv
+from cowork_core.approvals import InMemoryApprovalStore
 from cowork_core.skills import SkillRegistry
 from cowork_core.tools import COWORK_CONTEXT_KEY, CoworkToolContext
 from cowork_core.tools.email.draft import email_draft
@@ -30,6 +32,8 @@ def tctx(tmp_path: Path) -> MagicMock:
         session=session,
         config=cfg,
         skills=SkillRegistry(),
+        env=ManagedExecEnv(project=project, session=session),
+        approvals=InMemoryApprovalStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}

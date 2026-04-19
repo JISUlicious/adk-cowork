@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from cowork_core.config import CoworkConfig
+from cowork_core.execenv import ExecEnvError, ManagedExecEnv
+from cowork_core.approvals import InMemoryApprovalStore
 from cowork_core.skills import SkillRegistry
 from cowork_core.tools import COWORK_CONTEXT_KEY, CoworkToolContext, ToolRegistry
 from cowork_core.tools.fs import (
@@ -19,7 +21,7 @@ from cowork_core.tools.fs import (
     fs_write,
     register_fs_tools,
 )
-from cowork_core.workspace import ProjectRegistry, Workspace, WorkspaceError
+from cowork_core.workspace import ProjectRegistry, Workspace
 
 
 @pytest.fixture
@@ -35,6 +37,8 @@ def tctx(tmp_path: Path) -> MagicMock:
         session=session,
         config=CoworkConfig(),
         skills=SkillRegistry(),
+        env=ManagedExecEnv(project=project, session=session),
+        approvals=InMemoryApprovalStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}
@@ -129,7 +133,8 @@ def test_promote_moves_to_files(tctx: MagicMock) -> None:
 
 
 def test_traversal_rejected(tctx: MagicMock) -> None:
-    with pytest.raises(WorkspaceError):
-        fs_read("../../etc/passwd", tctx)
-    with pytest.raises(WorkspaceError):
-        fs_write("../escape.txt", "nope", tctx)
+    # Tools surface escape attempts as {"error": ...} so the agent can self-correct.
+    r = fs_read("../../etc/passwd", tctx)
+    assert "error" in r
+    w = fs_write("../escape.txt", "nope", tctx)
+    assert "error" in w

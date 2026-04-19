@@ -219,10 +219,14 @@ export function useChat(client: CoworkClient) {
     [client, handleEvent],
   );
 
+  /** Scope describes which kind of session to create/resume. Managed mode
+   *  supplies ``project`` (a slug); local-dir mode supplies ``workdir``. */
+  type Scope = { project?: string; workdir?: string } | undefined;
+
   const ensureSession = useCallback(
-    async (project?: string) => {
+    async (scope: Scope) => {
       if (sessionRef.current) return sessionRef.current;
-      const info = await client.createSession(project);
+      const info = await client.createSession(scope);
       connectSession(info.session_id);
       return info.session_id;
     },
@@ -230,7 +234,7 @@ export function useChat(client: CoworkClient) {
   );
 
   const resumeSession = useCallback(
-    async (existingSessionId: string, project: string) => {
+    async (existingSessionId: string, scope: Scope) => {
       // Save current session state before switching
       saveCurrentSession();
 
@@ -243,7 +247,7 @@ export function useChat(client: CoworkClient) {
       }
 
       try {
-        const info = await client.resumeSession(existingSessionId, project);
+        const info = await client.resumeSession(existingSessionId, scope ?? {});
         setMessagesSync([]);
         pendingRef.current = null;
         toolMapRef.current = new Map();
@@ -272,7 +276,7 @@ export function useChat(client: CoworkClient) {
   );
 
   const send = useCallback(
-    async (text: string, project?: string) => {
+    async (text: string, scope: Scope) => {
       if (!text.trim() || sending) return;
       setMessagesSync((prev) => [
         ...prev,
@@ -280,7 +284,7 @@ export function useChat(client: CoworkClient) {
       ]);
       setSendingSync(true);
       try {
-        const sid = await ensureSession(project);
+        const sid = await ensureSession(scope);
         await client.sendMessage(sid, text);
       } catch (e) {
         setSendingSync(false);
@@ -309,7 +313,7 @@ export function useChat(client: CoworkClient) {
   }, [client, setMessagesSync, setSendingSync]);
 
   const newSession = useCallback(
-    async (project?: string) => {
+    async (scope: Scope) => {
       saveCurrentSession();
       client.disconnect();
       sessionRef.current = null;
@@ -319,7 +323,7 @@ export function useChat(client: CoworkClient) {
       setMessagesSync([]);
       setSendingSync(false);
       try {
-        const info = await client.createSession(project);
+        const info = await client.createSession(scope);
         connectSession(info.session_id);
       } catch (e) {
         setMessagesSync((prev) => [

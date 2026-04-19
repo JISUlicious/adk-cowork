@@ -5,7 +5,6 @@ from __future__ import annotations
 from google.adk.tools.tool_context import ToolContext
 
 from cowork_core.tools.base import get_cowork_context
-from cowork_core.tools.fs._paths import try_resolve_project_path
 
 
 def fs_list(path: str, tool_context: ToolContext) -> dict[str, object]:
@@ -18,7 +17,7 @@ def fs_list(path: str, tool_context: ToolContext) -> dict[str, object]:
         ``{"path": str, "entries": [{"name", "kind", "size"}, ...]}``.
     """
     ctx = get_cowork_context(tool_context)
-    abspath = try_resolve_project_path(ctx, path)
+    abspath = ctx.env.try_resolve(path)
     if isinstance(abspath, str):
         return {"error": abspath}
     if not abspath.is_dir():

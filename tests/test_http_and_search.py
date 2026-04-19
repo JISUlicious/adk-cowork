@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 from cowork_core.config import CoworkConfig
+from cowork_core.execenv import ManagedExecEnv
+from cowork_core.approvals import InMemoryApprovalStore
 from cowork_core.skills import SkillRegistry
 from cowork_core.tools import COWORK_CONTEXT_KEY, CoworkToolContext
 from cowork_core.tools.http import http_fetch
@@ -28,6 +30,8 @@ def tctx(tmp_path: Path) -> MagicMock:
         session=session,
         config=CoworkConfig(),
         skills=SkillRegistry(),
+        env=ManagedExecEnv(project=project, session=session),
+        approvals=InMemoryApprovalStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}

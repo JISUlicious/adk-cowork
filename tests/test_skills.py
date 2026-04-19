@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from cowork_core.config import CoworkConfig
+from cowork_core.execenv import ManagedExecEnv
+from cowork_core.approvals import InMemoryApprovalStore
 from cowork_core.skills import (
     Skill,
     SkillLoadError,
@@ -112,6 +114,8 @@ def test_load_skill_tool_roundtrip(tmp_path: Path) -> None:
         session=session,
         config=CoworkConfig(),
         skills=skill_reg,
+        env=ManagedExecEnv(project=project, session=session),
+        approvals=InMemoryApprovalStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}
@@ -134,6 +138,8 @@ def test_load_skill_unknown(tmp_path: Path) -> None:
         session=session,
         config=CoworkConfig(),
         skills=SkillRegistry(),
+        env=ManagedExecEnv(project=project, session=session),
+        approvals=InMemoryApprovalStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}

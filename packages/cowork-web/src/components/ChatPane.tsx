@@ -9,9 +9,17 @@ interface Props {
   messages: ChatMessage[];
   sending: boolean;
   onSend: (text: string) => void;
+  onApproveTool?: (toolName: string, summary: string) => void | Promise<void>;
+  onDenyTool?: (toolName: string, summary: string) => void;
 }
 
-export function ChatPane({ messages, sending, onSend }: Props) {
+export function ChatPane({
+  messages,
+  sending,
+  onSend,
+  onApproveTool,
+  onDenyTool,
+}: Props) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -80,8 +88,17 @@ export function ChatPane({ messages, sending, onSend }: Props) {
                     <ToolCallCard
                       key={tc.id}
                       entry={tc}
-                      onApprove={(s) => onSend(`Approved: ${s}`)}
-                      onDeny={(s) => onSend(`Denied: ${s}`)}
+                      onApprove={async (toolName, summary) => {
+                        // Grant the server-side approval first — the
+                        // permission callback consumes it on the next
+                        // call of that tool. Then nudge the model.
+                        await onApproveTool?.(toolName, summary);
+                        onSend(`Approved: ${summary}`);
+                      }}
+                      onDeny={(toolName, summary) => {
+                        onDenyTool?.(toolName, summary);
+                        onSend(`Denied: ${summary}`);
+                      }}
                     />
                   ))}
                   {msg.text && (

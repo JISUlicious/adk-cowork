@@ -77,8 +77,33 @@ fn target_triple() -> &'static str {
     }
 }
 
+/// Returns true when ``p`` exists and is non-empty. An empty file indicates a
+/// corrupted or interrupted bundle (PBS extractions can leave 0-byte stubs
+/// behind) and should fall through to the next candidate rather than get
+/// spawned into a silently-failing process.
+fn is_usable_binary(p: &std::path::Path) -> bool {
+    std::fs::metadata(p)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+}
+
 fn python_binary(app: &AppHandle) -> Result<PathBuf, String> {
     let triple = target_triple();
+
+    // Dev override: set ``COWORK_PYTHON=/path/to/python`` to use any
+    // interpreter (system, uv, venv) and skip bundling entirely. Useful for
+    // tight iteration loops where re-running scripts/bundle_python.py each
+    // time would be a drag.
+    if let Ok(override_path) = std::env::var("COWORK_PYTHON") {
+        let bin = PathBuf::from(override_path);
+        if is_usable_binary(&bin) {
+            return Ok(bin);
+        }
+        log::warn!(
+            "COWORK_PYTHON set to {} but file is missing or empty — falling through",
+            bin.display(),
+        );
+    }
 
     // Packaged build: Tauri copies `resources/python/` next to the binary.
     if let Ok(resource_root) = app.path().resource_dir() {
@@ -88,7 +113,7 @@ fn python_binary(app: &AppHandle) -> Result<PathBuf, String> {
         } else {
             packaged.join("bin").join("python3")
         };
-        if bin.exists() {
+        if is_usable_binary(&bin) {
             return Ok(bin);
         }
     }
@@ -104,11 +129,14 @@ fn python_binary(app: &AppHandle) -> Result<PathBuf, String> {
     } else {
         dev.join("bin").join("python3")
     };
-    if bin.exists() {
+    if is_usable_binary(&bin) {
         return Ok(bin);
     }
     Err(format!(
-        "bundled Python not found for {triple}. Run `uv run python scripts/bundle_python.py` first."
+        "bundled Python not found (or is empty) for {triple}. \
+         Either set COWORK_PYTHON=/path/to/python to point at a system \
+         interpreter, or run `uv run python scripts/bundle_python.py \
+         --target {triple} --editable` to refresh the bundle."
     ))
 }
 

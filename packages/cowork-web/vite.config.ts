@@ -18,11 +18,20 @@ export default defineConfig({
         target: `http://127.0.0.1:${serverPort}`,
         changeOrigin: true,
         ws: true,
-        headers: serverToken ? { "x-cowork-token": serverToken } : {},
+        // No static headers here. The React client puts ``x-cowork-token``
+        // on every fetch (see CoworkClient.headers()), so adding a second
+        // copy here would either be redundant (single-token mode) or
+        // *overwrite* the client's value (multi-user mode, where each
+        // tab authenticates as a different user via ``?token=…``). Let
+        // the client own the token.
       },
     },
   },
   define: {
+    // Build-time default token — used in browser mode when neither the
+    // Tauri sidecar nor a ``?token=…`` URL param supplies one. Fine for
+    // single-token dev loops; ignored under multi-user auth where each
+    // tab explicitly sets its own key.
     __COWORK_TOKEN__: JSON.stringify(serverToken),
   },
 });

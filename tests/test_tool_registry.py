@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from cowork_core.config import CoworkConfig
+from cowork_core.execenv import ManagedExecEnv
+from cowork_core.approvals import InMemoryApprovalStore
 from cowork_core.skills import SkillRegistry
 from cowork_core.tools import (
     COWORK_CONTEXT_KEY,
@@ -64,6 +66,8 @@ def test_get_cowork_context_roundtrip(tmp_path: Path) -> None:
         session=session,
         config=CoworkConfig(),
         skills=SkillRegistry(),
+        env=ManagedExecEnv(project=project, session=session),
+        approvals=InMemoryApprovalStore(),
     )
 
     fake = MagicMock()

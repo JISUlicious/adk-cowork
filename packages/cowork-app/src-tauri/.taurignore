@@ -1,0 +1,17 @@
+# Files/directories the Tauri dev-mode watcher must NOT treat as "source
+# changed, rebuild." These trees get touched by incidental filesystem
+# activity (OS index updates, .pyc lazy writes, etc.) and each touch kicks
+# off a full `cargo run` rebuild — so dev mode loops forever.
+#
+# These paths are still bundled into release builds via
+# `tauri.conf.json → bundle.resources`; the watcher exclusion only affects
+# dev-mode rebuild triggers.
+
+# Bundled CPython runtime (~50k files, Python writes .pyc's on import).
+resources/
+
+# Cargo build output (Tauri should already skip this, but be explicit).
+target/
+
+# Tauri-generated schemas.
+gen/

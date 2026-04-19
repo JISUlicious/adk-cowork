@@ -68,17 +68,14 @@ def shell_run(
     timeout_sec = max(1, min(int(timeout_sec), 600))
 
     if cwd is None:
-        work_dir: Path = ctx.session.scratch_dir
+        work_dir: Path = ctx.env.scratch_dir()
     else:
-        from cowork_core.tools.fs._paths import resolve_project_path
-        from cowork_core.workspace import WorkspaceError
-
-        try:
-            work_dir = resolve_project_path(ctx, cwd)
-        except WorkspaceError as e:
-            return {"error": str(e)}
-        if not work_dir.is_dir():
+        resolved = ctx.env.try_resolve(cwd)
+        if isinstance(resolved, str):
+            return {"error": resolved}
+        if not resolved.is_dir():
             return {"error": f"cwd is not a directory: {cwd}"}
+        work_dir = resolved
 
     start = time.monotonic()
     try:

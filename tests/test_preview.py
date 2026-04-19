@@ -171,11 +171,64 @@ class TestImagePreview:
 
 
 class TestUnsupportedFormat:
-    def test_raises_for_unknown_ext(self, tmp: Path) -> None:
+    def test_binary_unknown_ext_rejected(self, tmp: Path) -> None:
+        """Unknown extension + binary content (NUL bytes) → reject."""
         f = tmp / "data.xyz"
-        f.write_text("stuff")
+        f.write_bytes(b"\x00\x01\x02mystery\x00\x03")
         with pytest.raises(ValueError, match="unsupported preview format"):
             preview_file(f)
+
+
+class TestTextPreview:
+    """Text fallback catches .py, .txt, .log, .json, Dockerfiles, and
+    unknown-extension files whose content sniffs as text. This is the
+    common-files support users expect — without it previews 422 for
+    anything that isn't md/docx/pdf/xlsx/csv/image."""
+
+    def test_py_file_renders_as_text(self, tmp: Path) -> None:
+        f = tmp / "hello.py"
+        f.write_text("print('hi')\n")
+        result = preview_file(f)
+        assert result.content_type == "text/html"
+        # HTML-escaped inside the <pre>; quotes become &#x27;
+        assert b"print(" in result.body
+        assert b"hi" in result.body
+
+    def test_txt_file_renders(self, tmp: Path) -> None:
+        f = tmp / "notes.txt"
+        f.write_text("just some notes\n")
+        result = preview_file(f)
+        assert result.content_type == "text/html"
+        assert b"just some notes" in result.body
+
+    def test_html_escaped_in_text_preview(self, tmp: Path) -> None:
+        """Source code with angle brackets must not render as HTML."""
+        f = tmp / "index.html"
+        f.write_text("<script>alert(1)</script>\n")
+        result = preview_file(f)
+        body = result.body.decode("utf-8")
+        assert "&lt;script&gt;" in body
+        assert "<script>alert(1)</script>" not in body
+
+    def test_dockerfile_by_name(self, tmp: Path) -> None:
+        f = tmp / "Dockerfile"
+        f.write_text("FROM python:3.12\n")
+        result = preview_file(f)
+        assert b"FROM python:3.12" in result.body
+
+    def test_unknown_ext_but_textual_content(self, tmp: Path) -> None:
+        """NUL-byte sniff lets .xyz files through if they look like text."""
+        f = tmp / "mystery.xyz"
+        f.write_text("plain text content\n")
+        result = preview_file(f)
+        assert b"plain text content" in result.body
+
+    def test_text_preview_truncates_huge_files(self, tmp: Path) -> None:
+        f = tmp / "huge.log"
+        # Write > 500 KB of text
+        f.write_text("x" * 600_000)
+        result = preview_file(f)
+        assert b"truncated" in result.body
 
 
 class TestPreviewCache:

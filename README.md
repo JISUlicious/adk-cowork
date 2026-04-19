@@ -22,35 +22,100 @@ That's it. Cowork spawns a local server, creates a session, and drops you into a
 
 ## Running the web UI (browser)
 
-The React UI under `packages/cowork-web` talks to the same FastAPI server as the CLI.
+The React UI under `packages/cowork-web` talks to the same FastAPI server as
+the CLI. For a zero-friction dev loop, pin the port + token in `.env`:
 
 ```bash
-# Terminal 1: start the server (prints COWORK_READY host=... port=... token=...)
+# In the repo-root .env (copy from .env.sample first):
+COWORK_PORT=9100
+COWORK_TOKEN="cowork-local-dev-token"
+```
+
+Then either use the **one-command launcher**:
+
+```bash
+scripts/dev.sh    # starts cowork-server + Vite in parallel; Ctrl+C stops both
+```
+
+…or two terminals by hand:
+
+```bash
+# Terminal 1: server picks up COWORK_PORT + COWORK_TOKEN from .env
 uv run python -m cowork_server
 
-# Terminal 2: start Vite. It proxies /v1 to the server on port 8765 by default.
+# Terminal 2: Vite proxies /v1 → 127.0.0.1:$COWORK_PORT and embeds the token
 cd packages/cowork-web
 npm install
 npm run dev
 ```
 
-Open the printed Vite URL (usually `http://localhost:5173`). On first load the UI
-uses the token from `VITE_COWORK_TOKEN` or a `?token=` query param.
+Open `http://localhost:5173`. Both processes pull from the same `.env`, so
+there's nothing to pass on the command line — and nothing to copy-paste out
+of stdout between restarts.
+
+Without `COWORK_PORT` set, the server picks a random free port each launch
+(production behavior). Vite's proxy then defaults to `9100` and they won't
+agree — set it explicitly in `.env` or pass `COWORK_PORT=…` inline.
+
+## Surface modes
+
+One `cowork-core`, two surfaces, selected at session-create time:
+
+| Mode | Surface | Session creation | Where files live |
+|---|---|---|---|
+| **Desktop (local-dir)** | Tauri app | `POST /v1/sessions {"workdir": "/path"}` — user picks a folder via `tauri-plugin-dialog` | The picked folder. Agent paths are relative to it; scratch at `<workdir>/.cowork/sessions/<id>/`. |
+| **Web (managed)** | Browser | `POST /v1/sessions {"project": "Name"}` | `~/CoworkWorkspaces/projects/<slug>/{files,sessions}` — classic `scratch/` + `files/` two-namespace view. |
+| **Web multi-user** | Browser + `cowork.toml` `[auth].keys` | Same as web, but each API key maps to its own `user_id` | `~/CoworkWorkspaces/users/<user_id>/projects/<slug>/…` — each tenant is isolated. |
+
+Both surfaces speak the same `/v1/*` + SSE contract. The only differences
+are the system-prompt "Working context" paragraph (which comes from the
+session's `ExecEnv.describe_for_prompt()`) and whether `fs_read("draft.md")`
+resolves to a cowork-managed file or a file in the user's chosen folder.
+
+The runtime backend (event bus, connection limiter, session service) is
+selected by `[runtime] backend` in `cowork.toml`; today only `"local"`
+(single-process asyncio + SQLite) is implemented. `"distributed"` (Redis +
+Postgres + multi-worker) is a forward-compatible drop-in — see SPEC §2.9.3.
 
 ## Running the desktop app (Tauri)
 
 The desktop app under `packages/cowork-app` bundles an embedded CPython and the
-Cowork server, so end users don't need `uv` or Python installed.
+Cowork server, so end users don't need `uv` or Python installed. On launch
+the user picks a working directory via **File → Open Folder…** (`Cmd/Ctrl+O`)
+and the agent operates on that folder for the session.
 
-For day-to-day development against the **system** Python (faster iteration):
+### Dev loop (recommended)
+
+Point the Tauri sidecar at the repo's `.venv` instead of rebundling
+Python every iteration. One-time setup:
+
+```bash
+cp .env.sample .env
+# In .env, uncomment and set:
+#   COWORK_PYTHON="<repo-abs-path>/.venv/bin/python"
+```
+
+The desktop shell reads this file via `dotenvy` at startup **in debug
+builds only** (`packages/cowork-app/src-tauri/src/lib.rs`), so release
+installers ignore it. Then:
 
 ```bash
 cd packages/cowork-app
 npm install
-npm run dev        # launches Tauri dev window with hot-reload
+npm run dev        # launches Tauri dev window; picks COWORK_PYTHON from .env
 ```
 
-For a **production** build with embedded Python (what release CI does):
+First-run UX: the window opens, you click **File → Open Folder…**
+(`Cmd/Ctrl+O`), pick a directory, and the agent operates on it. Path
+confinement keeps writes inside the chosen folder. Recent picks are
+remembered across reloads.
+
+**If `npm run dev` rebuilds forever**: the `.taurignore` in
+`src-tauri/` already excludes `resources/` (bundled Python) from the
+file watcher; restart `npm run dev` after first setup so it picks that
+up.
+
+### Release build (embedded Python)
 
 ```bash
 # 1. Download python-build-standalone for your triple and pip-install cowork
@@ -62,6 +127,11 @@ cd packages/cowork-app
 npm install
 npx tauri build
 ```
+
+If the bundle is corrupted (any 0-byte file under
+`resources/python/<triple>/`), the sidecar falls through to
+`COWORK_PYTHON` with a clear log; re-run step 1 with `--editable` to
+repair.
 
 Supported triples: `aarch64-apple-darwin`, `x86_64-apple-darwin`,
 `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.
@@ -79,7 +149,7 @@ on a clean VM for each OS (macOS arm64, Ubuntu 24.04, Windows 11).
 | `COWORK_MODEL_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible `/v1/chat/completions` endpoint |
 | `COWORK_MODEL_API_KEY` | `env:OPENAI_API_KEY` | API key (or literal `env:VAR` to read from another env var) |
 | `COWORK_MODEL_NAME` | *(see config.py)* | Model identifier your endpoint expects |
-| `COWORK_WORKSPACE_ROOT` | `~/CoworkWorkspaces` | Where projects, sessions, and skills live on disk |
+| `COWORK_WORKSPACE_ROOT` | `~/CoworkWorkspaces` | Where managed projects, sessions, and skills live on disk. Local-dir (desktop) sessions store their bookkeeping under `<workdir>/.cowork/` instead. |
 
 ### Example: LM Studio
 
@@ -101,18 +171,23 @@ uv run cowork
 
 ## What's wired
 
-12 tools are registered with the root agent:
+13 tools are registered with the root agent (+ researcher, writer, analyst, reviewer sub-agents that inherit the pool):
 
 | Tool | What it does |
 |---|---|
 | `fs_read / fs_write / fs_edit` | Read, write, exact-match-replace text files |
 | `fs_list / fs_glob / fs_stat` | Directory listing, glob search, file metadata |
-| `fs_promote` | Move a draft from session `scratch/` into project `files/` |
+| `fs_promote` | Move a draft from session `scratch/` into project `files/` (managed mode) |
 | `shell_run` | argv-only subprocess (allowlist-gated, no shell expansion) |
 | `python_exec_run` | Run a Python snippet in a sandbox (network off by default) |
 | `http_fetch` | GET a URL (scheme + size + redirect caps) |
 | `search_web` | DuckDuckGo text search (zero setup, no API key) |
+| `email_draft / email_send` | Compose an `.eml` in scratch; SMTP-send with confirm/deny policy |
 | `load_skill` | Load a named skill's body into the agent's context |
+
+Path vocabulary depends on the session's `ExecEnv`: managed sessions use the
+`scratch/` + `files/` namespaces; local-dir (desktop) sessions use plain
+relative paths rooted at the user's chosen folder.
 
 ## Project layout
 

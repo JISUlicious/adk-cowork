@@ -3,19 +3,30 @@ import { CoworkClient } from "./transport/client";
 import { useChat } from "./hooks/useChat";
 import { TopBar } from "./components/TopBar";
 import { Sidebar } from "./components/Sidebar";
+import { DesktopSidebar } from "./components/DesktopSidebar";
 import { ChatPane } from "./components/ChatPane";
 import { FileCanvas } from "./components/FileCanvas";
+import { DesktopFileCanvas } from "./components/DesktopFileCanvas";
 import { StatusBar } from "./components/StatusBar";
 import {
+  copyIntoWorkdir,
+  getRecentWorkdir,
   isTauri,
   onFileDrop,
   openWorkspaceInFileManager,
+  pickWorkdir,
+  setRecentWorkdir,
 } from "./transport/tauri";
 
 interface AppProps {
   baseUrl?: string;
   token?: string;
 }
+
+/** The agent-facing surface. Derives from the runtime environment, not a
+ *  build-time flag, so the same bundle runs under Tauri and in a plain
+ *  browser. Desktop defaults to local-dir mode; web defaults to managed. */
+type Surface = "desktop" | "web";
 
 function App({ baseUrl, token }: AppProps = {}) {
   const client = useMemo(() => new CoworkClient(baseUrl, token), [baseUrl, token]);
@@ -25,34 +36,68 @@ function App({ baseUrl, token }: AppProps = {}) {
     hasToken: Boolean(token),
     origin: typeof window !== "undefined" ? window.location.origin : "?",
   });
+  const surface: Surface = isTauri() ? "desktop" : "web";
   const [project, setProject] = useState<string | null>(null);
+  const [workdir, setWorkdir] = useState<string | null>(null);
   const [dropStatus, setDropStatus] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { messages, sending, send, reset, newSession, resumeSession, sessionId } =
     useChat(client);
 
+  // Scope passed to useChat — determines managed vs local-dir session type.
+  const scope = workdir ? { workdir } : project ? { project } : undefined;
+
+  // On launch in desktop mode, reopen whatever folder the user had last.
+  useEffect(() => {
+    if (surface !== "desktop") return;
+    (async () => {
+      const recent = await getRecentWorkdir();
+      if (recent) setWorkdir(recent);
+    })();
+  }, [surface]);
+
+  const handlePickWorkdir = async () => {
+    const picked = await pickWorkdir();
+    if (!picked) return;
+    if (picked === workdir) return;
+    reset();
+    setWorkdir(picked);
+    setProject(null); // Cannot be in both modes at once.
+    await setRecentWorkdir(picked);
+  };
+
   const handleSelectProject = (slug: string) => {
     if (slug !== project) {
       reset();
       setProject(slug);
+      setWorkdir(null);
     }
   };
 
   const handleSelectSession = async (sid: string) => {
     if (sid === sessionId) return;
-    if (!project) return;
-    await resumeSession(sid, project);
+    if (!scope) return;
+    await resumeSession(sid, scope);
   };
 
   const handleNewSession = () => {
-    if (project) {
-      void newSession(project);
+    if (scope) {
+      void newSession(scope);
     } else {
       reset();
     }
   };
 
   const handleDeleteSession = async (sid: string) => {
+    if (workdir) {
+      try {
+        await client.deleteLocalSession(workdir, sid);
+        if (sid === sessionId) reset();
+      } catch (e) {
+        console.error("[cowork] delete local session failed:", e);
+      }
+      return;
+    }
     if (!project) return;
     try {
       await client.deleteSession(project, sid);
@@ -75,14 +120,41 @@ function App({ baseUrl, token }: AppProps = {}) {
   };
 
   const handleSend = (text: string) => {
-    send(text, project || undefined);
+    send(text, scope);
   };
 
-  // Native file-drop: upload dropped files into the active project's files/.
+  const handleApproveTool = async (toolName: string, _summary: string) => {
+    if (!sessionId) return;
+    try {
+      await client.approveTool(sessionId, toolName);
+    } catch (e) {
+      console.error("[cowork] approveTool failed:", e);
+    }
+  };
+
+  // Native file-drop: in managed mode upload into the project; in local-dir
+  // mode copy directly into the chosen workdir so the agent sees it.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     (async () => {
       unlisten = await onFileDrop(async (paths) => {
+        if (surface === "desktop") {
+          if (!workdir) {
+            setDropStatus("Pick a folder before dropping files");
+            return;
+          }
+          for (const p of paths) {
+            const name = p.split("/").pop() || "upload.bin";
+            setDropStatus(`Copying ${name} into workdir…`);
+            try {
+              await copyIntoWorkdir(p, workdir);
+              setDropStatus(`Copied ${name}`);
+            } catch (e) {
+              setDropStatus(`Copy failed: ${e}`);
+            }
+          }
+          return;
+        }
         if (!project) {
           setDropStatus("Select a project before dropping files");
           return;
@@ -110,7 +182,7 @@ function App({ baseUrl, token }: AppProps = {}) {
     return () => {
       unlisten?.();
     };
-  }, [client, project]);
+  }, [client, project, surface, workdir]);
 
   // Menu events from the native shell.
   useEffect(() => {
@@ -123,6 +195,9 @@ function App({ baseUrl, token }: AppProps = {}) {
           case "new_project":
             reset();
             break;
+          case "open_folder":
+            void handlePickWorkdir();
+            break;
           case "open_workspace":
             void openWorkspaceInFileManager();
             break;
@@ -132,6 +207,10 @@ function App({ baseUrl, token }: AppProps = {}) {
     return () => {
       unlisten?.();
     };
+  // handlePickWorkdir captures reset + setWorkdir; include reset in deps so
+  // the listener sees the current closure. handlePickWorkdir itself is stable
+  // across renders for our purposes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reset]);
 
   return (
@@ -149,16 +228,28 @@ function App({ baseUrl, token }: AppProps = {}) {
             </span>
           </div>
           <div className="flex min-h-0 flex-1">
-            <Sidebar
-              client={client}
-              project={project}
-              sessionId={sessionId}
-              onSelectProject={handleSelectProject}
-              onSelectSession={handleSelectSession}
-              onNewSession={handleNewSession}
-              onDeleteSession={handleDeleteSession}
-              onDeleteProject={handleDeleteProject}
-            />
+            {surface === "desktop" ? (
+              <DesktopSidebar
+                client={client}
+                workdir={workdir}
+                sessionId={sessionId}
+                onPickWorkdir={handlePickWorkdir}
+                onSelectSession={handleSelectSession}
+                onNewSession={handleNewSession}
+                onDeleteSession={handleDeleteSession}
+              />
+            ) : (
+              <Sidebar
+                client={client}
+                project={project}
+                sessionId={sessionId}
+                onSelectProject={handleSelectProject}
+                onSelectSession={handleSelectSession}
+                onNewSession={handleNewSession}
+                onDeleteSession={handleDeleteSession}
+                onDeleteProject={handleDeleteProject}
+              />
+            )}
           </div>
         </aside>
 
@@ -171,18 +262,33 @@ function App({ baseUrl, token }: AppProps = {}) {
             onToggleSidebar={() => setSidebarOpen((v) => !v)}
           />
           <div className="flex-1 flex flex-col min-h-0">
-            <ChatPane messages={messages} sending={sending} onSend={handleSend} />
+            <ChatPane
+              messages={messages}
+              sending={sending}
+              onSend={handleSend}
+              onApproveTool={handleApproveTool}
+            />
           </div>
           <StatusBar sessionId={sessionId} />
         </main>
 
-        {/* Right panel — files */}
+        {/* Right panel — files. Web surface speaks the project API
+            (scratch/+files/ layout); desktop surface browses the
+            user-picked workdir. */}
         <aside className="hidden xl:flex shrink-0 w-80 flex-col overflow-hidden rounded-[24px] border border-[var(--dls-border)] bg-[var(--dls-surface)] shadow-[var(--dls-card-shadow)]">
-          <FileCanvas
-            client={client}
-            project={project}
-            sessionId={sessionId}
-          />
+          {surface === "desktop" ? (
+            <DesktopFileCanvas
+              client={client}
+              workdir={workdir}
+              sessionId={sessionId}
+            />
+          ) : (
+            <FileCanvas
+              client={client}
+              project={project}
+              sessionId={sessionId}
+            />
+          )}
         </aside>
       </div>
 

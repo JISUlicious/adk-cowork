@@ -61,7 +61,7 @@ The winning shape is: **a tiny, well-typed core loop + a provider abstraction + 
 - No hosted service, no Cloud Run / Vertex deploy. (Architecture keeps the door open — see §2.9.)
 - No custom model hosting, no fine-tuning. (Local inference is the user's responsibility, via LM Studio / Ollama / vLLM behind the OpenAI-compatible adapter.)
 - No IDE plugin.
-- No multi-tenant auth.
+- No distributed backend (Redis bus, Postgres sessions, multi-worker Uvicorn) *yet*. A small-team web deployment with multi-user auth runs on the single-process in-memory backend; distributed backends are a forward-compatible drop-in against the `EventBus` / `ConnectionLimiter` / `CoworkSessionService` protocols (see §2.9.3).
 
 ### 2.2 High-level architecture
 
@@ -289,10 +289,11 @@ Heavy conversions (docx→html, xlsx→json, pdf thumbnailing) run in the **serv
 
 | Mode | How | Notes |
 |---|---|---|
-| **Desktop app** (`cowork-app`) — *primary end-user surface* | Tauri v2 shell spawns `cowork-server` as a sidecar on `127.0.0.1:random`, loads the `cowork-web` bundle into a native webview | One installer per OS: `.msi`/`.exe` (Windows), `.dmg` (macOS), `.deb`/`.AppImage` (Linux). Native menus, tray, file-drop, OS notifications, auto-update via **GitHub Releases**. v0.1 ships **unsigned dev builds**; code-signing is deferred. Python runtime shipped as an embedded `uv`-built standalone interpreter + wheels — users install nothing. |
-| **Local web** — *alternative end-user surface* | User runs `cowork serve`, opens `http://127.0.0.1:PORT` in a browser | Same `cowork-server` + `cowork-web` bundle, just without the Tauri shell. Useful on machines where users prefer not to install a desktop app. |
+| **Desktop app** (`cowork-app`) — *primary end-user surface* | Tauri v2 shell spawns `cowork-server` as a sidecar on `127.0.0.1:random`, loads the `cowork-web` bundle into a native webview | One installer per OS: `.msi`/`.exe` (Windows), `.dmg` (macOS), `.deb`/`.AppImage` (Linux). Native menus, tray, file-drop, OS notifications, auto-update via **GitHub Releases**. v0.1 ships **unsigned dev builds**; code-signing is deferred. Python runtime shipped as an embedded `uv`-built standalone interpreter + wheels — users install nothing. User picks a **local working directory**; the agent operates directly on the files there (see §2.9.3). |
+| **Local web** — *alternative end-user surface* | User runs `cowork serve`, opens `http://127.0.0.1:PORT` in a browser | Same `cowork-server` + `cowork-web` bundle, just without the Tauri shell. Useful on machines where users prefer not to install a desktop app. Runs in managed mode with projects and sessions under `~/CoworkWorkspaces`. |
+| **Multi-user web** — *small team* | Same server with `[auth].keys = { ... }` in `cowork.toml`; each API key maps to a distinct user | In-process asyncio backend (bus + limiter + SQLite sessions), comfortable for roughly one or two dozen concurrent sessions. Per-user isolation is enforced via a `<workspace>/users/<user_id>/` subtree; Alice cannot see Bob's projects (§2.9.3). |
 | **Local CLI** — *developer surface only* | `cowork chat` — CLI/TUI speaks to same local server | Same protocol, no browser, no Tauri. Not shipped as a primary end-user experience. |
-| **Hosted service** — *future, not in v0.1* | `cowork-server` behind a reverse proxy on a VPS, or eventually Cloud Run / Vertex Agent Engine | Architecture is already service-ready (§2.2 client/server split). Adding hosted mode later means wiring auth + per-user volumes + TLS, with no change to core. |
+| **Hosted service** — *future, not in v0.1* | `cowork-server` behind a reverse proxy on a VPS, or eventually Cloud Run / Vertex Agent Engine | Architecture is already service-ready (§2.2 client/server split). Adding hosted mode later means wiring TLS + scaling the runtime backend; see §2.9.3 for the forward-compatible upgrade path. |
 
 The core does not know which mode it is in. Mode is a config file and a launcher.
 
@@ -388,6 +389,79 @@ The Python server must run without the user installing Python. Two supported str
 2. **PyInstaller one-file** (fallback for tiny installers): freeze `cowork-server` into a single executable per OS and ship that as the sidecar. Loses hot-patching but simplifies signing.
 
 Choice is per-release and invisible to the UI layer.
+
+### 2.9.3 Surface modes: desktop (local-dir) vs web (managed)
+
+The agent core (`cowork-core`) is surface-agnostic. Two deployment shapes
+plug in via two concerns that the core does *not* hard-code:
+
+- **Where files live** — the `ExecEnv` protocol
+  (`cowork_core/execenv/`). `ManagedExecEnv` gives the classic
+  `scratch/` + `files/` two-namespace view rooted under
+  `<workspace>/projects/<slug>/`. `LocalDirExecEnv` points the agent
+  at a user-picked directory; agent paths are plain relative paths
+  under that root; session bookkeeping lives at
+  `<workdir>/.cowork/sessions/<id>/`.
+- **Which runtime backend serves requests** — three protocols carry
+  the distributed seam without any route surgery:
+  `EventBus` (`cowork_server/bus/`), `ConnectionLimiter`
+  (`cowork_server/limiter/`), and `CoworkSessionService`
+  (`cowork_core/sessions/`). Today the only implementations are the
+  in-memory / SQLite ones; future `RedisEventBus`,
+  `RedisConnectionLimiter`, and `PostgresCoworkSessionService`
+  slot in as new files against the same protocols.
+
+The **surface selector** is `POST /v1/sessions`:
+
+- Body `{ "workdir": "/abs/path" }` → local-dir / desktop mode.
+  `cowork-app` uses the Tauri `tauri-plugin-dialog` folder picker,
+  then passes the chosen absolute path.
+- Body `{ "project": "<slug or name>" }` → managed / web mode. The
+  session lives under `<workspace.root>/projects/<slug>/` (or
+  `<workspace.root>/users/<user_id>/projects/<slug>/` when
+  multi-user auth is active).
+
+Both modes speak the same `/v1/*` contract otherwise. SSE events,
+history replay, tool execution, and the system prompt are identical;
+only the `describe_for_prompt()` text and path vocabulary change
+per env.
+
+**Multi-user isolation.** When `[auth].keys` is non-empty in
+`cowork.toml`, `MultiKeyGuard` maps each API key to a stable
+`user_id`. `CoworkRuntime.workspace_for(user_id)` /
+`registry_for(user_id)` route all project operations into
+`<workspace.root>/users/<user_id>/`, so tenants cannot list or
+resolve each other's files. In sidecar (single-token) mode the
+user_id is always `"local"` and this subtree is skipped.
+
+**Sandboxing posture (desktop).** Path confinement is the
+mechanism: `LocalDirExecEnv.resolve()` absolutizes the candidate
+and rejects anything that escapes the chosen root. Shell and Python
+tools retain their own hardening
+(`shell_run` argv allowlist + `python_exec_run` subprocess lockdown).
+OS-level sandboxes (macOS seatbelt, Linux landlock, Windows
+AppContainer) are **explicitly deferred** — path confinement is
+sufficient for v1, and operators who need defense in depth can pair
+it with an external container.
+
+**Distributed upgrade path (deferred).** When a deployment needs
+horizontal scale, the in-memory bus + SQLite sessions become the
+bottleneck. The plan is a one-file addition per backend:
+
+- `packages/cowork-server/src/cowork_server/bus/redis.py` —
+  `RedisEventBus` publishing to a Redis stream keyed by `session_id`.
+- `packages/cowork-server/src/cowork_server/limiter/redis.py` —
+  `RedisConnectionLimiter` with per-user counters in Redis.
+- `packages/cowork-core/src/cowork_core/sessions/postgres.py` —
+  `PostgresCoworkSessionService` wrapping ADK's database session
+  service (or equivalent) with the same
+  `register_context` builder seam.
+
+Selection will happen via `[runtime] backend = "distributed"` in
+`cowork.toml`; today `build_runtime` raises `NotImplementedError` on
+that value so configs can't silently misroute. Multi-worker Uvicorn
+follows once shared state is wired. No route or core-loop change is
+expected — surfaces already go through the protocols.
 
 ### 2.13 Milestones
 

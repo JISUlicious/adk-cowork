@@ -73,3 +73,23 @@ def test_upload_endpoint_writes_file(tmp_path: Path) -> None:
 
 def test_cli_importable() -> None:
     import cowork_cli.main  # noqa: F401
+
+
+def test_runtime_config_defaults_to_local() -> None:
+    from cowork_core import CoworkConfig
+
+    cfg = CoworkConfig()
+    assert cfg.runtime.backend == "local"
+
+
+def test_build_runtime_rejects_unimplemented_backend(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import RuntimeConfig, WorkspaceConfig
+    from cowork_core.runner import build_runtime
+
+    cfg = CoworkConfig(
+        workspace=WorkspaceConfig(root=tmp_path),
+        runtime=RuntimeConfig(backend="distributed"),
+    )
+    with pytest.raises(NotImplementedError, match="not implemented"):
+        build_runtime(cfg)

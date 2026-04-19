@@ -22,22 +22,31 @@ from cowork_core.agents.analyst import ANALYST_INSTRUCTION
 from cowork_core.agents.researcher import RESEARCHER_INSTRUCTION
 from cowork_core.agents.reviewer import REVIEWER_INSTRUCTION
 from cowork_core.agents.writer import WRITER_INSTRUCTION
+from cowork_core.callbacks import make_model_callbacks
 from cowork_core.config import CoworkConfig, McpServerConfig
 from cowork_core.model.openai_compat import build_model
 from cowork_core.policy.hooks import make_audit_callbacks
 from cowork_core.policy.permissions import make_permission_callback
+from cowork_core.tools.base import COWORK_CONTEXT_KEY, COWORK_POLICY_MODE_KEY
 
-ROOT_INSTRUCTION_BASE = """\
+ROOT_HEADER = """\
 You are Cowork, an office-work copilot.
 
 You help the user with documents, spreadsheets, PDFs, research, and drafting.
 Be concise and practical. Ask for confirmation before any destructive action.
+"""
 
+# Fallback working-context paragraph — used when no ExecEnv is available
+# (e.g. during agent construction before any session has started). At runtime
+# the env's own ``describe_for_prompt()`` takes over.
+ROOT_WORKING_CONTEXT_FALLBACK = """\
 Working context:
 - `scratch/` is the current session's draft directory — work here freely.
 - `files/` is the project's durable storage — call `fs_promote` to move a
   draft from scratch into it.
+"""
 
+ROOT_TAIL = """\
 Tool use:
 - Use `fs_read` / `fs_write` / `fs_edit` for text files.
 - Use `python_exec_run` for programmatic document work (docx, xlsx, pdf, …).
@@ -100,20 +109,68 @@ def _build_mcp_toolset(mcp_cfg: McpServerConfig) -> Any | None:
         return None
 
 
+def _compose_instruction(
+    working_context: str,
+    skills_snippet: str,
+    policy_mode: str,
+) -> str:
+    """Assemble the root system prompt for a single turn.
+
+    Header → env-specific working-context paragraph → tool-use guidance →
+    sub-agent guidance → optional skill catalog → optional plan-mode addendum.
+    """
+    parts = [ROOT_HEADER.rstrip(), working_context.rstrip(), ROOT_TAIL.rstrip()]
+    if skills_snippet:
+        parts.append(skills_snippet.rstrip())
+    prompt = "\n\n".join(parts) + "\n"
+    if policy_mode == "plan":
+        prompt = prompt + PLAN_MODE_ADDENDUM
+    return prompt
+
+
+def _env_description(ctx: ReadonlyContext) -> str:
+    """Pull the session's env description paragraph out of state.
+
+    Falls back to the managed-mode paragraph when no ``CoworkToolContext``
+    is stashed yet (e.g. during static agent construction before any
+    session has opened).
+    """
+    cowork_ctx = ctx.state.get(COWORK_CONTEXT_KEY)
+    env = getattr(cowork_ctx, "env", None)
+    if env is not None:
+        return env.describe_for_prompt()
+    return ROOT_WORKING_CONTEXT_FALLBACK
+
+
+def _sub_agent_instruction(base: str):
+    """Wrap a static sub-agent instruction string so it gets the same
+    env-specific Working Context paragraph that the root prompt uses.
+
+    Sub-agents delegate-to-and-from the root and share its session state,
+    so they need the same path vocabulary. Without this, a desktop
+    (local-dir) session handing work to ``writer`` would tell it to
+    ``fs_write`` into ``scratch/`` — a namespace that doesn't exist.
+    """
+
+    def _instruction(ctx: ReadonlyContext) -> str:
+        working_context = _env_description(ctx)
+        return f"{working_context.rstrip()}\n\n{base.rstrip()}\n"
+
+    return _instruction
+
+
 def build_root_agent(
     cfg: CoworkConfig,
     tools: Sequence[BaseTool] | None = None,
     skills_snippet: str = "",
 ) -> LlmAgent:
-    base_instruction = ROOT_INSTRUCTION_BASE
-    if skills_snippet:
-        base_instruction = f"{ROOT_INSTRUCTION_BASE}\n{skills_snippet}\n"
-
-    # Dynamic instruction — resolves at each turn based on current policy mode
-    def _dynamic_instruction(_ctx: ReadonlyContext) -> str:
-        if cfg.policy.mode == "plan":
-            return base_instruction + PLAN_MODE_ADDENDUM
-        return base_instruction
+    # Dynamic instruction — resolved per turn so the working-context paragraph
+    # reflects the session's ExecEnv and the policy-mode addendum reflects
+    # whatever mode the session is currently in.
+    def _dynamic_instruction(ctx: ReadonlyContext) -> str:
+        working_context = _env_description(ctx)
+        mode = ctx.state.get(COWORK_POLICY_MODE_KEY, cfg.policy.mode)
+        return _compose_instruction(working_context, skills_snippet, mode)
 
     model = build_model(cfg.model)
     adk_tools: list[Any] = list(tools or [])
@@ -124,36 +181,55 @@ def build_root_agent(
         if toolset:
             adk_tools.append(toolset)
 
-    # Policy callbacks
+    # Policy + audit + model callbacks — applied to every agent (root +
+    # sub-agents) so plan-mode enforcement, audit logging, and turn-budget
+    # guards are uniform.
     permission_cb = make_permission_callback(cfg.policy)
     audit_before, audit_after = make_audit_callbacks()
+    before_model_cb, after_model_cb = make_model_callbacks()
     before_tool_cbs = [permission_cb, audit_before]
     after_tool_cbs = [audit_after]
 
-    # Sub-agents share the same model and tools
+    # Sub-agents share the same model, tools, and callbacks.
     researcher = LlmAgent(
         name="researcher",
         model=model,
-        instruction=RESEARCHER_INSTRUCTION,
+        instruction=_sub_agent_instruction(RESEARCHER_INSTRUCTION),
         tools=adk_tools,
+        before_tool_callback=before_tool_cbs,
+        after_tool_callback=after_tool_cbs,
+        before_model_callback=before_model_cb,
+        after_model_callback=after_model_cb,
     )
     writer = LlmAgent(
         name="writer",
         model=model,
-        instruction=WRITER_INSTRUCTION,
+        instruction=_sub_agent_instruction(WRITER_INSTRUCTION),
         tools=adk_tools,
+        before_tool_callback=before_tool_cbs,
+        after_tool_callback=after_tool_cbs,
+        before_model_callback=before_model_cb,
+        after_model_callback=after_model_cb,
     )
     analyst = LlmAgent(
         name="analyst",
         model=model,
-        instruction=ANALYST_INSTRUCTION,
+        instruction=_sub_agent_instruction(ANALYST_INSTRUCTION),
         tools=adk_tools,
+        before_tool_callback=before_tool_cbs,
+        after_tool_callback=after_tool_cbs,
+        before_model_callback=before_model_cb,
+        after_model_callback=after_model_cb,
     )
     reviewer = LlmAgent(
         name="reviewer",
         model=model,
-        instruction=REVIEWER_INSTRUCTION,
+        instruction=_sub_agent_instruction(REVIEWER_INSTRUCTION),
         tools=adk_tools,
+        before_tool_callback=before_tool_cbs,
+        after_tool_callback=after_tool_cbs,
+        before_model_callback=before_model_cb,
+        after_model_callback=after_model_cb,
     )
 
     return LlmAgent(
@@ -164,4 +240,6 @@ def build_root_agent(
         sub_agents=[researcher, writer, analyst, reviewer],
         before_tool_callback=before_tool_cbs,
         after_tool_callback=after_tool_cbs,
+        before_model_callback=before_model_cb,
+        after_model_callback=after_model_cb,
     )

@@ -16,11 +16,24 @@ from cowork_core.workspace import Project, ProjectRegistry, Session, Workspace
 if TYPE_CHECKING:
     from google.adk.tools.tool_context import ToolContext
 
+    from cowork_core.approvals import ApprovalStore
     from cowork_core.config import CoworkConfig
+    from cowork_core.execenv import ExecEnv
     from cowork_core.skills.loader import SkillRegistry
 
 COWORK_CONTEXT_KEY = "cowork.tool_context"
 COWORK_READS_KEY = "cowork.session_reads"
+COWORK_POLICY_MODE_KEY = "cowork.policy_mode"
+# Per-session override for ``PolicyConfig.python_exec`` — one of
+# ``"confirm" | "allow" | "deny"``. Permission callback falls back to
+# ``cfg.policy.python_exec`` when unset.
+COWORK_PYTHON_EXEC_KEY = "cowork.python_exec"
+
+# Per-session ``dict[str, int]`` — name of a gated tool → number of pending
+# user approvals for it. The permission callback decrements on each
+# consumed approval; the ``POST /v1/sessions/{id}/approvals`` endpoint
+# increments. See ``policy/permissions.py``.
+COWORK_TOOL_APPROVALS_KEY = "cowork.tool_approvals"
 
 
 @dataclass(frozen=True)
@@ -31,6 +44,8 @@ class CoworkToolContext:
     session: Session
     config: CoworkConfig
     skills: SkillRegistry
+    env: ExecEnv
+    approvals: ApprovalStore
 
 
 def get_cowork_context(tool_context: ToolContext) -> CoworkToolContext:

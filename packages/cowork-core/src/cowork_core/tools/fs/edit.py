@@ -11,7 +11,6 @@ from __future__ import annotations
 from google.adk.tools.tool_context import ToolContext
 
 from cowork_core.tools.base import get_cowork_context, was_read
-from cowork_core.tools.fs._paths import try_resolve_project_path
 
 
 def fs_edit(
@@ -35,7 +34,7 @@ def fs_edit(
     if not was_read(tool_context, path):
         return {"error": f"must read {path} before editing (call fs_read first)"}
     ctx = get_cowork_context(tool_context)
-    abspath = try_resolve_project_path(ctx, path)
+    abspath = ctx.env.try_resolve(path)
     if isinstance(abspath, str):
         return {"error": abspath}
     if not abspath.is_file():

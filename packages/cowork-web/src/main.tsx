@@ -19,6 +19,13 @@ async function bootstrap() {
     } else {
       console.error("Tauri sidecar did not publish server info");
     }
+  } else {
+    // Browser mode: let the page-load URL override the build-time token
+    // via ``?token=…``. Useful for multi-user dev — the same Vite bundle
+    // embeds one build-time token, but different tabs can authenticate
+    // as different users without rebuilding.
+    const fromQuery = new URLSearchParams(window.location.search).get("token");
+    if (fromQuery) token = fromQuery;
   }
 
   createRoot(document.getElementById("root")!).render(

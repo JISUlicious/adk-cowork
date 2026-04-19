@@ -63,16 +63,32 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     @app.get("/v1/health")
     async def health() -> dict[str, Any]:
+        """Service + per-component status.
+
+        ``backend`` names the runtime backend in use (today always
+        ``local``). ``components`` is a dict of subsystem → status;
+        distributed deployments extend this with ``eventbus``,
+        ``sessions``, etc. ``auth`` reports whether multi-user keys are
+        configured, so clients can distinguish sidecar from hosted.
+        """
         return {
             "status": "ok",
+            "backend": cfg.runtime.backend,
+            "auth": "multi-user" if runtime.multi_user else "sidecar",
+            "components": {
+                "eventbus": "ok",
+                "limiter": "ok",
+                "sessions": "ok",
+            },
             "tools": runtime.tools.names(),
             "skills": runtime.skills.names(),
         }
 
-    # ── Policy (per-session, falls back to default) ────────────────────
+    # ── Policy (per-session, falls back to server default) ─────────────
 
     @app.get("/v1/policy/mode")
     async def get_policy_mode(user: UserIdentity = Depends(guard)) -> dict[str, str]:
+        """Server-wide default used for fresh sessions. Read-only today."""
         return {"mode": default_policy_mode}
 
     @app.put("/v1/policy/mode")
@@ -80,12 +96,114 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         body: dict[str, Any],
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
+        """Deprecated: use ``/v1/sessions/{id}/policy/mode`` instead.
+
+        Accepts and validates the mode but does not mutate the server default.
+        Clients should move to the per-session endpoint.
+        """
         mode = body.get("mode", "")
         if mode not in ("plan", "work", "auto"):
             raise HTTPException(status_code=400, detail="mode must be plan, work, or auto")
-        # For now, accept the mode but return it without mutating global config.
-        # Full per-session policy storage is a future enhancement.
         return {"mode": mode}
+
+    @app.get("/v1/sessions/{session_id}/policy/mode")
+    async def get_session_policy_mode(
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        try:
+            mode = await runtime.get_session_policy_mode(
+                session_id=session_id, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"mode": mode}
+
+    @app.put("/v1/sessions/{session_id}/policy/mode")
+    async def set_session_policy_mode(
+        session_id: str,
+        body: dict[str, Any],
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        mode = body.get("mode", "")
+        try:
+            applied = await runtime.set_session_policy_mode(
+                session_id=session_id, mode=mode, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            # 400 for unknown mode, 404 for missing session.
+            if "unknown policy mode" in str(exc):
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"mode": applied}
+
+    @app.get("/v1/sessions/{session_id}/policy/python_exec")
+    async def get_session_python_exec_policy(
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        try:
+            policy = await runtime.get_session_python_exec(
+                session_id=session_id, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"policy": policy}
+
+    @app.put("/v1/sessions/{session_id}/policy/python_exec")
+    async def set_session_python_exec_policy(
+        session_id: str,
+        body: dict[str, Any],
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        policy = body.get("policy", "")
+        try:
+            applied = await runtime.set_session_python_exec(
+                session_id=session_id, policy=policy, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            if "unknown python_exec policy" in str(exc):
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"policy": applied}
+
+    # ── Per-session tool approvals ─────────────────────────────────────
+
+    @app.get("/v1/sessions/{session_id}/approvals")
+    async def list_approvals(
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, int]:
+        """Return ``{tool_name: pending_count}`` for this session."""
+        try:
+            return await runtime.list_tool_approvals(
+                session_id=session_id, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/v1/sessions/{session_id}/approvals")
+    async def grant_approval(
+        session_id: str,
+        body: dict[str, Any],
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Grant one approval for a tool name.
+
+        Body: ``{"tool": "python_exec_run"}``. The permission callback
+        consumes the approval on the next invocation of that tool, so one
+        POST allows exactly one subsequent call.
+        """
+        tool = body.get("tool", "")
+        if not isinstance(tool, str) or not tool:
+            raise HTTPException(status_code=400, detail="'tool' is required")
+        try:
+            remaining = await runtime.grant_tool_approval(
+                session_id=session_id, tool_name=tool, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"tool": tool, "remaining": remaining}
 
     # ── Sessions ───────────────────────────────────────────────────────
 
@@ -94,16 +212,38 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         body: dict[str, Any] | None = None,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
-        project_name = None
+        """Create a new session.
+
+        Body:
+            {"project": "<slug or name>"}   — managed mode (web surface), or
+            {"workdir": "/abs/path"}        — local-dir mode (desktop surface)
+
+        Supplying ``workdir`` is the **surface selector**: present = desktop,
+        absent = web. Providing both is rejected.
+        """
+        project_name: str | None = None
+        workdir: str | None = None
         if body is not None:
             project_name = body.get("project")
-        project, session, adk_sid = await runtime.open_session(
-            user_id=user.user_id, project_name=project_name,
-        )
+            workdir = body.get("workdir")
+        if project_name and workdir:
+            raise HTTPException(
+                status_code=400,
+                detail="supply either 'project' or 'workdir', not both",
+            )
+        try:
+            project, session, adk_sid = await runtime.open_session(
+                user_id=user.user_id,
+                project_name=project_name,
+                workdir=workdir,
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "session_id": adk_sid,
             "project": project.slug,
             "cowork_session_id": session.id,
+            "workdir": str(workdir) if workdir else "",
         }
 
     @app.post("/v1/sessions/{session_id}/resume")
@@ -112,21 +252,33 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         body: dict[str, Any],
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
-        project_slug = body.get("project", "")
-        if not project_slug:
-            raise HTTPException(status_code=400, detail="project is required")
+        project_slug = body.get("project") or None
+        workdir = body.get("workdir") or None
+        if not project_slug and not workdir:
+            raise HTTPException(
+                status_code=400, detail="project or workdir is required",
+            )
+        if project_slug and workdir:
+            raise HTTPException(
+                status_code=400,
+                detail="supply either 'project' or 'workdir', not both",
+            )
         try:
             project, session, adk_sid = await runtime.resume_session(
-                project_slug=project_slug,
                 session_id=session_id,
+                project_slug=project_slug,
+                workdir=workdir,
                 user_id=user.user_id,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "session_id": adk_sid,
             "project": project.slug,
             "cowork_session_id": session.id,
+            "workdir": str(workdir) if workdir else "",
         }
 
     @app.get("/v1/sessions/{session_id}/history")
@@ -143,6 +295,109 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         if existing is None:
             raise HTTPException(status_code=404, detail="session not found")
         return events_to_history(getattr(existing, "events", []) or [])
+
+    # ── Local-dir file browser (desktop surface) ───────────────────────
+
+    @app.get("/v1/local-files")
+    async def list_local_files(
+        workdir: str,
+        path: str = "",
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """List entries of ``<workdir>/<path>``. Path confined via
+        ``LocalDirExecEnv``. Hides the ``.cowork/`` bookkeeping subtree."""
+        from pathlib import Path as _P
+
+        from cowork_core.execenv import ExecEnvError, LocalDirExecEnv
+
+        try:
+            env = LocalDirExecEnv(workdir=_P(workdir), session_id="browse")
+        except ExecEnvError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            abspath = env.resolve(path or ".")
+        except ExecEnvError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not abspath.is_dir():
+            raise HTTPException(status_code=404, detail=f"not a directory: {path}")
+        entries: list[dict[str, Any]] = []
+        for child in sorted(abspath.iterdir()):
+            if child.name == ".cowork":
+                continue  # bookkeeping, not user content
+            if child.is_dir():
+                entries.append({"name": child.name, "kind": "dir", "size": None})
+            else:
+                try:
+                    size = child.stat().st_size
+                except OSError:
+                    size = None
+                entries.append({"name": child.name, "kind": "file", "size": size})
+        return {"path": path or ".", "entries": entries}
+
+    @app.get("/v1/local-files/content")
+    async def read_local_file(
+        workdir: str,
+        path: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Read up to 2 MB of ``<workdir>/<path>`` as UTF-8 text."""
+        from pathlib import Path as _P
+
+        from cowork_core.execenv import ExecEnvError, LocalDirExecEnv
+
+        try:
+            env = LocalDirExecEnv(workdir=_P(workdir), session_id="browse")
+            abspath = env.resolve(path)
+        except ExecEnvError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not abspath.is_file():
+            raise HTTPException(status_code=404, detail=f"not a file: {path}")
+        max_bytes = 2_000_000
+        data = abspath.read_bytes()
+        truncated = len(data) > max_bytes
+        if truncated:
+            data = data[:max_bytes]
+        return {
+            "path": path,
+            "content": data.decode("utf-8", errors="replace"),
+            "truncated": truncated,
+            "size": abspath.stat().st_size,
+        }
+
+    # ── Local-dir sessions (desktop surface) ───────────────────────────
+
+    @app.get("/v1/local-sessions")
+    async def list_local_sessions_endpoint(
+        workdir: str,
+        user: UserIdentity = Depends(guard),
+    ) -> list[dict[str, Any]]:
+        """List sessions recorded under ``<workdir>/.cowork/sessions/``."""
+        from pathlib import Path as _P
+
+        sessions = runtime.list_local_sessions(_P(workdir))
+        return [
+            {
+                "id": s.id,
+                "created_at": s.created_at,
+                "title": s.title,
+            }
+            for s in sessions
+        ]
+
+    @app.delete("/v1/local-sessions/{session_id}")
+    async def delete_local_session_endpoint(
+        session_id: str,
+        workdir: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        from pathlib import Path as _P
+
+        await runtime.delete_local_session(
+            workdir=_P(workdir),
+            session_id=session_id,
+            user_id=user.user_id,
+        )
+        return {"status": "ok"}
 
     @app.post("/v1/sessions/{session_id}/messages")
     async def send_message(
@@ -227,7 +482,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     @app.get("/v1/projects")
     async def list_projects(user: UserIdentity = Depends(guard)) -> list[dict[str, str]]:
-        projects = runtime.projects.list()
+        projects = runtime.registry_for(user.user_id).list()
         return [
             {"slug": p.slug, "name": p.name, "created_at": p.created_at}
             for p in projects
@@ -242,7 +497,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
         try:
-            project = runtime.projects.create(name)
+            project = runtime.registry_for(user.user_id).create(name)
         except Exception as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"slug": project.slug, "name": project.name, "created_at": project.created_at}
@@ -253,7 +508,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         user: UserIdentity = Depends(guard),
     ) -> list[dict[str, Any]]:
         try:
-            proj = runtime.projects.get(project)
+            proj = runtime.registry_for(user.user_id).get(project)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         sessions_dir = proj.sessions_dir
@@ -279,7 +534,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
         try:
-            runtime.projects.delete_project(project)
+            runtime.registry_for(user.user_id).delete_project(project)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"status": "deleted"}
@@ -291,7 +546,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
         try:
-            runtime.projects.delete_session(project, session_id)
+            runtime.registry_for(user.user_id).delete_session(project, session_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"status": "deleted"}
@@ -305,7 +560,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         user: UserIdentity = Depends(guard),
     ) -> list[dict[str, Any]]:
         try:
-            full_path = runtime.workspace.resolve(f"projects/{project}/{path}")
+            full_path = runtime.workspace_for(user.user_id).resolve(f"projects/{project}/{path}")
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not full_path.is_dir():
@@ -332,7 +587,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=400, detail="prefix must be 'files' or 'scratch'")
         basename = (file.filename or "upload.bin").split("/")[-1].split("\\")[-1]
         try:
-            dest = runtime.workspace.resolve(f"projects/{project}/{prefix}/{basename}")
+            dest = runtime.workspace_for(user.user_id).resolve(f"projects/{project}/{prefix}/{basename}")
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -350,7 +605,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         user: UserIdentity = Depends(guard),
     ) -> Response:
         try:
-            full_path = runtime.workspace.resolve(f"projects/{project}/{path}")
+            full_path = runtime.workspace_for(user.user_id).resolve(f"projects/{project}/{path}")
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not full_path.is_file():

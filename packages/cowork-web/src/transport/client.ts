@@ -92,6 +92,10 @@ export class CoworkClient {
     if (!r.ok) throw new Error(`deleteSession: ${r.status}`);
   }
 
+  /** Server-wide default mode — used for sessions that have not been
+   *  opened yet. Read-only in practice today; ``setPolicyMode`` is a
+   *  deprecated shim. Use the session-scoped variants below for real
+   *  mutations. */
   async getPolicyMode(): Promise<string> {
     const r = await fetch(`${this.baseUrl}/v1/policy/mode`, {
       headers: this.headers(),
@@ -101,22 +105,76 @@ export class CoworkClient {
     return data.mode;
   }
 
-  async setPolicyMode(mode: string): Promise<string> {
-    const r = await fetch(`${this.baseUrl}/v1/policy/mode`, {
-      method: "PUT",
-      headers: this.headers(),
-      body: JSON.stringify({ mode }),
-    });
-    if (!r.ok) throw new Error(`setPolicyMode: ${r.status}`);
+  async getSessionPolicyMode(sessionId: string): Promise<string> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/mode`,
+      { headers: this.headers() },
+    );
+    if (!r.ok) throw new Error(`getSessionPolicyMode: ${r.status}`);
     const data = await r.json();
     return data.mode;
   }
 
-  async createSession(project?: string): Promise<SessionInfo> {
+  async setSessionPolicyMode(
+    sessionId: string,
+    mode: string,
+  ): Promise<string> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/mode`,
+      {
+        method: "PUT",
+        headers: this.headers(),
+        body: JSON.stringify({ mode }),
+      },
+    );
+    if (!r.ok) throw new Error(`setSessionPolicyMode: ${r.status}`);
+    const data = await r.json();
+    return data.mode;
+  }
+
+  async getSessionPythonExec(sessionId: string): Promise<string> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/python_exec`,
+      { headers: this.headers() },
+    );
+    if (!r.ok) throw new Error(`getSessionPythonExec: ${r.status}`);
+    return (await r.json()).policy;
+  }
+
+  async setSessionPythonExec(
+    sessionId: string,
+    policy: "confirm" | "allow" | "deny",
+  ): Promise<string> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/python_exec`,
+      {
+        method: "PUT",
+        headers: this.headers(),
+        body: JSON.stringify({ policy }),
+      },
+    );
+    if (!r.ok) throw new Error(`setSessionPythonExec: ${r.status}`);
+    return (await r.json()).policy;
+  }
+
+  /**
+   * Create a new session.
+   *
+   * Pass ``project`` for managed mode (web surface) or ``workdir`` for
+   * local-dir mode (desktop surface). The two are mutually exclusive; the
+   * server rejects both.
+   */
+  async createSession(opts?: {
+    project?: string;
+    workdir?: string;
+  }): Promise<SessionInfo> {
+    const body: Record<string, string> = {};
+    if (opts?.project) body.project = opts.project;
+    if (opts?.workdir) body.workdir = opts.workdir;
     const r = await fetch(`${this.baseUrl}/v1/sessions`, {
       method: "POST",
       headers: this.headers(),
-      body: project ? JSON.stringify({ project }) : undefined,
+      body: Object.keys(body).length ? JSON.stringify(body) : undefined,
     });
     if (!r.ok) throw new Error(`createSession: ${r.status}`);
     return r.json();
@@ -124,18 +182,88 @@ export class CoworkClient {
 
   async resumeSession(
     sessionId: string,
-    project: string,
+    opts: { project?: string; workdir?: string },
   ): Promise<SessionInfo> {
+    const body: Record<string, string> = {};
+    if (opts.project) body.project = opts.project;
+    if (opts.workdir) body.workdir = opts.workdir;
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/resume`,
       {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify({ project }),
+        body: JSON.stringify(body),
       },
     );
     if (!r.ok) throw new Error(`resumeSession: ${r.status}`);
     return r.json();
+  }
+
+  /** Grant one approval for a gated tool in this session. The permission
+   *  callback consumes the approval on the next call of ``toolName``. */
+  async approveTool(
+    sessionId: string,
+    toolName: string,
+  ): Promise<{ tool: string; remaining: number }> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/approvals`,
+      {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ tool: toolName }),
+      },
+    );
+    if (!r.ok) throw new Error(`approveTool: ${r.status}`);
+    return r.json();
+  }
+
+  async listLocalFiles(
+    workdir: string,
+    path: string = "",
+  ): Promise<{
+    path: string;
+    entries: { name: string; kind: "dir" | "file"; size: number | null }[];
+  }> {
+    const qs = new URLSearchParams({ workdir, path });
+    const r = await fetch(`${this.baseUrl}/v1/local-files?${qs.toString()}`, {
+      headers: this.headers(),
+    });
+    if (!r.ok) throw new Error(`listLocalFiles: ${r.status}`);
+    return r.json();
+  }
+
+  async readLocalFile(
+    workdir: string,
+    path: string,
+  ): Promise<{ path: string; content: string; truncated: boolean; size: number }> {
+    const qs = new URLSearchParams({ workdir, path });
+    const r = await fetch(
+      `${this.baseUrl}/v1/local-files/content?${qs.toString()}`,
+      { headers: this.headers() },
+    );
+    if (!r.ok) throw new Error(`readLocalFile: ${r.status}`);
+    return r.json();
+  }
+
+  async listLocalSessions(
+    workdir: string,
+  ): Promise<{ id: string; created_at: string; title: string | null }[]> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/local-sessions?workdir=${encodeURIComponent(workdir)}`,
+      { headers: this.headers() },
+    );
+    if (!r.ok) throw new Error(`listLocalSessions: ${r.status}`);
+    return r.json();
+  }
+
+  async deleteLocalSession(workdir: string, sessionId: string): Promise<void> {
+    const h: Record<string, string> = {};
+    if (this.token) h["x-cowork-token"] = this.token;
+    const r = await fetch(
+      `${this.baseUrl}/v1/local-sessions/${sessionId}?workdir=${encodeURIComponent(workdir)}`,
+      { method: "DELETE", headers: h },
+    );
+    if (!r.ok) throw new Error(`deleteLocalSession: ${r.status}`);
   }
 
   async getHistory(sessionId: string): Promise<AdkEvent[]> {
