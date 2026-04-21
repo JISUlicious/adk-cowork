@@ -68,7 +68,10 @@ def shell_run(
     timeout_sec = max(1, min(int(timeout_sec), 600))
 
     if cwd is None:
-        work_dir: Path = ctx.env.scratch_dir()
+        # Managed mode: sandboxed scratch. Local-dir mode: the user's
+        # workdir, so relative paths the agent sees match what it'd
+        # get from fs tools.
+        work_dir: Path = ctx.env.agent_cwd()
     else:
         resolved = ctx.env.try_resolve(cwd)
         if isinstance(resolved, str):

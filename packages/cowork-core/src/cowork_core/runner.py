@@ -16,10 +16,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from google.adk.apps.app import App, EventsCompactionConfig
+from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.runners import Runner
 
 from cowork_core.agents.root_agent import build_root_agent
-from cowork_core.approvals import ApprovalStore, InMemoryApprovalStore
+from cowork_core.model.openai_compat import build_model
+from cowork_core.approvals import (
+    ApprovalStore,
+    InMemoryApprovalEventLog,
+    InMemoryApprovalStore,
+)
+from cowork_core.notifications import (
+    InMemoryNotificationStore,
+    NotificationStore,
+)
 from cowork_core.config import CoworkConfig
 from cowork_core.execenv import LocalDirExecEnv, ManagedExecEnv
 from cowork_core.sessions import SqliteCoworkSessionService
@@ -59,6 +70,18 @@ class CoworkRuntime:
     # session state — see ``cowork_core/approvals.py`` for the race that
     # motivates this split.
     approvals: ApprovalStore = field(default_factory=InMemoryApprovalStore)
+    # Side-channel record of each approval action so the UI can replay
+    # "user approved this call" on history fetch without us writing
+    # into the ADK session's event list (which races the runner's
+    # OCC-guarded appends).
+    approval_log: InMemoryApprovalEventLog = field(
+        default_factory=InMemoryApprovalEventLog,
+    )
+    # Per-user notification inbox. Same "never write ADK session state"
+    # rule as ``approvals``: see ``cowork_core/notifications.py``.
+    notifications: NotificationStore = field(
+        default_factory=InMemoryNotificationStore,
+    )
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -184,12 +207,14 @@ class CoworkRuntime:
                 data = tomllib.load(f)
             created_at = data.get("created_at", "")
             title = data.get("title") or None
+            pinned = bool(data.get("pinned", False))
         else:
             created_at = (
                 datetime.fromtimestamp(session_root.stat().st_mtime, tz=UTC)
                 .isoformat(timespec="seconds")
             )
             title = None
+            pinned = False
 
         slug = workdir.name or "localdir"
         project = Project(
@@ -204,6 +229,7 @@ class CoworkRuntime:
             root=session_root,
             created_at=created_at,
             title=title,
+            pinned=pinned,
         )
         return project, session
 
@@ -225,6 +251,39 @@ class CoworkRuntime:
         out.sort(key=lambda s: s.created_at, reverse=True)
         return out
 
+    def set_local_session_pinned(
+        self, workdir: Path, session_id: str, pinned: bool,
+    ) -> Session:
+        """Toggle ``pinned`` on a local-dir session's TOML.
+
+        Mirrors ``ProjectRegistry.set_session_pinned`` for managed mode.
+        Uses the same ``_session_toml_lock`` to serialise writes across
+        concurrent handlers. Writes a session.toml if one doesn't
+        exist yet — local sessions are created without one today.
+        """
+
+        from cowork_core.workspace.project import _session_toml_lock, _write_toml
+
+        with _session_toml_lock:
+            _, session = self._rehydrate_local_session(workdir, session_id)
+            _write_toml(
+                session.toml_path,
+                {
+                    "id": session.id,
+                    "title": session.title or "",
+                    "created_at": session.created_at,
+                    "pinned": bool(pinned),
+                },
+            )
+            return Session(
+                id=session.id,
+                project_slug=session.project_slug,
+                root=session.root,
+                created_at=session.created_at,
+                title=session.title,
+                pinned=bool(pinned),
+            )
+
     async def delete_local_session(
         self,
         workdir: Path,
@@ -239,6 +298,7 @@ class CoworkRuntime:
         if session_root.is_dir():
             shutil.rmtree(session_root)
         self.approvals.clear(session_id)
+        self.approval_log.clear(session_id)
         # Best-effort ADK cleanup — ignore if the ADK session was never created.
         try:
             await self.runner.session_service.delete_session(
@@ -537,11 +597,34 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     db_path = str(global_dir / "sessions.db")
     session_service = SqliteCoworkSessionService(db_path)
 
-    runner = Runner(
-        app_name=APP_NAME,
-        agent=agent,
-        session_service=session_service,
-    )
+    # Build an ``App`` when compaction is enabled so ADK can run its
+    # native sliding-window + token-threshold compaction at the end of
+    # each invocation. When disabled we fall back to the legacy
+    # ``app_name + agent`` path so nothing extra is loaded.
+    if cfg.compaction.enabled:
+        summarizer = LlmEventSummarizer(llm=build_model(cfg.model))
+        compaction_config = EventsCompactionConfig(
+            summarizer=summarizer,
+            compaction_interval=cfg.compaction.compaction_interval,
+            overlap_size=cfg.compaction.overlap_size,
+            token_threshold=cfg.compaction.token_threshold,
+            event_retention_size=cfg.compaction.event_retention_size,
+        )
+        app = App(
+            name=APP_NAME,
+            root_agent=agent,
+            events_compaction_config=compaction_config,
+        )
+        runner = Runner(
+            app=app,
+            session_service=session_service,
+        )
+    else:
+        runner = Runner(
+            app_name=APP_NAME,
+            agent=agent,
+            session_service=session_service,
+        )
     return CoworkRuntime(
         cfg=cfg,
         workspace=workspace,

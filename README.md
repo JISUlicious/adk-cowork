@@ -189,6 +189,48 @@ Path vocabulary depends on the session's `ExecEnv`: managed sessions use the
 `scratch/` + `files/` namespaces; local-dir (desktop) sessions use plain
 relative paths rooted at the user's chosen folder.
 
+## Feature wire-up status
+
+Every UI affordance introduced by the Phase V visual overhaul, the E3
+compaction pipeline, or the Phase F wire-up plan. Rows flip as each
+phase lands. `culled` entries were intentionally removed (dupes or
+cosmetic variants); `deferred` entries are planned for a later tier.
+
+| Affordance | Surface | Status | Phase |
+|---|---|---|---|
+| Auto-save stamp | Titlebar | wired | V2 |
+| Project / session breadcrumb | Titlebar | wired | V2 |
+| Search button (⌘K) | Titlebar | wired (global) | P6 |
+| Notification bell | Titlebar | wired (ephemeral) | P5 |
+| Notification bell (sessions footer) | Sessions | culled | P1 |
+| Status dots (running / done) | Sessions | wired | V3 |
+| Status dot (waiting) | Sessions | wired | P2b |
+| Agent monogram stack | Sessions | wired | V3 |
+| Session search (local) | Sessions | wired | V3 |
+| Session search (global, ⌘K) | Sessions | wired (global) | P6 |
+| Session meta (N msgs · M files) | Sessions | wired | P3a |
+| Session pin / favourite | Sessions | wired | P3b |
+| Tree / grid / list toggle | Canvas | wired | V5 |
+| Multi-tab preview | Canvas | wired | V5 |
+| Rendered / source toggle | Canvas | wired | V5 / V7 |
+| File updated dot | Canvas | wired | P2a |
+| Approval card (inline) | Chat | wired | V4 |
+| Approval card (banner / queue) | Chat | culled | P1 |
+| Tool-call style (collapsed / expanded / terminal) | Chat | wired | V4 |
+| Composer attach | Chat | wired (ref-path v1) | P4 |
+| Composer auto-route pill | Chat | culled | P1 |
+| Composer @-mention | Chat | stubbed | deferred (Tier E) |
+| Compaction separator | Chat | wired | E3 |
+| Settings → Appearance (theme / accent / toolStyle) | Settings | wired | V6 |
+| Settings → Appearance → approval style | Settings | culled | P1 |
+| Settings → Appearance → refinement | Settings | culled | P1 |
+| Settings → Appearance → density / layout | Settings | culled | P4 |
+| Settings → Agents & tools (read-only) | Settings | wired | V6 / P1 |
+| Settings → Agents enable / disable | Settings | stubbed | deferred (Tier E) |
+| Settings → Per-agent tool allowlist | Settings | stubbed | deferred (Tier E) |
+| Settings → Approvals policy | Settings | wired | V6 |
+| Settings → System (health + compaction) | Settings | wired | V6 / E3 |
+
 ## Project layout
 
 ```
@@ -218,6 +260,7 @@ uv run pytest -q                 # run tests
 ## Documentation
 
 - [Specification](SPEC.md) -- what we're building and why
+- [Architecture](ARCHITECTURE.md) -- how the pieces fit together
 - [Implementation plan](PLAN.md) -- milestones and sub-tasks
 - [Constitution](CONSTITUTION.md) -- project rules
 - [File index](INDEX.md) -- every file with a one-liner

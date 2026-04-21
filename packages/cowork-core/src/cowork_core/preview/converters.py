@@ -186,16 +186,26 @@ def _preview_text(path: Path, chash: str) -> PreviewResult:
 
 
 def _wrap_text(text: str, title: str) -> str:
+    """Wrap raw text in a themed HTML page.
+
+    The palette mirrors the host's warm-editorial tokens (OKLCH paper +
+    ink). The iframe is sandboxed and doesn't inherit page CSS, so we
+    inline the tokens directly. Both light and dark variants are
+    declared so ``prefers-color-scheme`` switches without a reload.
+    """
+
     safe_title = html.escape(title)
     safe_text = html.escape(text)
     style = (
         ":root{color-scheme:light dark}"
-        "body{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;"
-        "font-size:12px;line-height:1.5;margin:0;padding:1em;"
-        "background:#fff;color:#111}"
+        # Light (warm off-white paper, warm ink)
+        "body{font-family:ui-monospace,'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;"
+        "font-size:12px;line-height:1.55;margin:0;padding:1em;"
+        "background:oklch(0.975 0.008 80);color:oklch(0.22 0.015 60)}"
         "pre{white-space:pre-wrap;word-break:break-word;margin:0}"
+        # Dark (deep warm paper, warm ink)
         "@media (prefers-color-scheme: dark){"
-        "body{background:#0b0f17;color:#e5e7eb}"
+        "body{background:oklch(0.16 0.008 60);color:oklch(0.92 0.01 75)}"
         "}"
     )
     return (
@@ -218,22 +228,40 @@ def _preview_md(path: Path, chash: str) -> PreviewResult:
 
 
 def _wrap_html(inner: str, title: str) -> str:
+    """Wrap rendered HTML (markdown output) in a themed page.
+
+    Mirrors the host's warm-editorial tokens — paper / ink in OKLCH so
+    the iframe matches the rest of the UI in both light and dark.
+    Headings use a serif stack (Instrument Serif first, system serif
+    fallback) and code blocks use the mono stack.
+    """
+
     safe_title = html.escape(title)
     style = (
         ":root{color-scheme:light dark}"
-        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        # Light
+        "body{font-family:'Instrument Serif',Georgia,'Times New Roman',serif;"
         "max-width:48em;margin:2em auto;padding:0 1em;"
-        "background:#fff;color:#111}"
-        "pre{background:#f4f4f4;padding:1em;overflow-x:auto}"
-        "code{background:#f4f4f4;padding:0.2em 0.4em}"
-        "a{color:#2563eb}"
+        "font-size:17px;line-height:1.6;letter-spacing:-0.005em;"
+        "background:oklch(0.975 0.008 80);color:oklch(0.22 0.015 60)}"
+        "h1,h2,h3,h4{font-weight:400;letter-spacing:-0.01em}"
+        "pre,code{font-family:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace}"
+        "pre{background:oklch(0.93 0.012 80);padding:1em;overflow-x:auto;border-radius:6px;font-size:13px}"
+        "code{background:oklch(0.93 0.012 80);padding:0.15em 0.4em;border-radius:3px;font-size:0.9em}"
+        "pre code{background:transparent;padding:0}"
+        "a{color:oklch(0.55 0.16 42);text-decoration:underline;text-underline-offset:2px}"
+        "blockquote{border-left:3px solid oklch(0.88 0.013 75);"
+        "color:oklch(0.45 0.012 60);margin:1em 0;padding:0.2em 0 0.2em 1em}"
+        "hr{border:0;border-top:1px solid oklch(0.88 0.013 75)}"
+        "th,td{border-color:oklch(0.88 0.013 75);padding:0.4em 0.6em}"
+        "table{border-collapse:collapse;border:1px solid oklch(0.88 0.013 75)}"
+        # Dark — deep warm paper + warm light ink
         "@media (prefers-color-scheme: dark){"
-        "body{background:#0b0f17;color:#e5e7eb}"
-        "pre,code{background:#1f2937;color:#e5e7eb}"
-        "a{color:#60a5fa}"
-        "blockquote{border-left:3px solid #374151;color:#9ca3af}"
-        "hr{border-color:#374151}"
-        "th,td{border-color:#374151}"
+        "body{background:oklch(0.16 0.008 60);color:oklch(0.92 0.01 75)}"
+        "pre,code{background:oklch(0.23 0.01 60);color:oklch(0.92 0.01 75)}"
+        "a{color:oklch(0.72 0.15 42)}"
+        "blockquote{border-left-color:oklch(0.34 0.011 60);color:oklch(0.65 0.01 75)}"
+        "hr,th,td,table{border-color:oklch(0.28 0.01 60)}"
         "}"
     )
     return (

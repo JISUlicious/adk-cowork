@@ -2,9 +2,15 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
+import { applyAppearance, loadPreferences } from "./preferences";
 import { bootstrapTheme } from "./theme";
 import { getServerFromTauri, isTauri } from "./transport/tauri";
 
+// Apply user appearance (density / layout / accent + static
+// refinement) and theme BEFORE React mounts so the first paint
+// already reflects the chosen palette — avoids a flash of the
+// default look.
+applyAppearance(loadPreferences());
 bootstrapTheme();
 
 async function bootstrap() {

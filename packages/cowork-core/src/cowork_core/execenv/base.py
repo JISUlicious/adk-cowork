@@ -44,6 +44,15 @@ class ExecEnv(Protocol):
     def scratch_dir(self) -> Path:
         """Directory the agent can freely write scratch work to."""
 
+    def agent_cwd(self) -> Path:
+        """Default cwd for shell / python execution.
+
+        Managed mode keeps the agent sandboxed inside ``scratch_dir`` so
+        snippets can't wander the workspace; local-dir mode returns the
+        user-picked workdir so prints like ``os.getcwd()`` match the
+        folder the user is actually editing.
+        """
+
     def namespaces(self) -> list[str]:
         """Agent-visible path namespaces.
 

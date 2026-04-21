@@ -52,6 +52,11 @@ class ManagedExecEnv:
     def scratch_dir(self) -> Path:
         return self.session.scratch_dir
 
+    def agent_cwd(self) -> Path:
+        # Managed mode sandboxes the agent inside scratch so python /
+        # shell calls can't wander the project.
+        return self.session.scratch_dir
+
     def namespaces(self) -> list[str]:
         return ["scratch", "files"]
 

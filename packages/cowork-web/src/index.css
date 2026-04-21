@@ -1,40 +1,48 @@
+/* @import rules must come first — fonts before Tailwind. */
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Warm-editorial design system (tokens + components). Loaded after
+   Tailwind so the semantic ``.app / .pane / .titlebar / .sessions /
+   .chat / .canvas`` rules win when components opt in. The legacy
+   ``--dls-*`` vars below still drive un-migrated components; V1→V5
+   swaps components over and V7 removes the legacy block. */
+@import "./styles/design.css";
+@import "./styles/refinements.css";
+
 :root {
-  color-scheme: light;
-  --dls-surface: #ffffff;
-  --dls-sidebar: #f9fafb;
-  --dls-app-bg: #ffffff;
-  --dls-border: #e5e7eb;
-  --dls-accent: #2563eb;
-  --dls-accent-hover: #1d4ed8;
-  --dls-accent-rgb: 37 99 235;
-  --dls-text-primary: #111827;
-  --dls-text-secondary: #6b7280;
-  --dls-hover: #f3f4f6;
-  --dls-active: #eef2f7;
-  --dls-radius: 12px;
-  --dls-radius-lg: 20px;
-  --dls-shell-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-  --dls-card-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  /* Initial runtime knob — the preferences store (V6) rebinds this
+     at runtime; any int in [0,360] works. */
+  --accent-h: 42;
+
+  /* Legacy ``--dls-*`` aliases. The remaining un-migrated surfaces
+     (ToolWidgets per-tool renderers, ui/Button, ui/TextInput,
+     FileViewer) still reference these names — point them at the
+     warm-editorial tokens so they inherit the new palette without
+     per-component edits. They flip with [data-theme] like everything
+     else because the underlying tokens do. */
+  --dls-surface: var(--paper);
+  --dls-sidebar: var(--paper-2);
+  --dls-app-bg: var(--paper-2);
+  --dls-border: var(--line);
+  --dls-accent: var(--accent);
+  --dls-accent-hover: var(--accent-ink);
+  --dls-text-primary: var(--ink);
+  --dls-text-secondary: var(--ink-3);
+  --dls-hover: var(--paper-3);
+  --dls-active: var(--paper-3);
+  --dls-radius: var(--radius);
+  --dls-radius-lg: var(--radius-lg);
+  --dls-shell-shadow: var(--shadow);
+  --dls-card-shadow: var(--shadow-sm);
+  /* RGB helper kept literal — inline rgba() callers can't reach OKLCH. */
+  --dls-accent-rgb: 200 110 60;
 }
 
 [data-theme="dark"] {
-  color-scheme: dark;
-  --dls-surface: #0b0f17;
-  --dls-sidebar: #111827;
-  --dls-app-bg: #0b0f17;
-  --dls-border: #1f2937;
-  --dls-accent: #3b82f6;
-  --dls-accent-hover: #2563eb;
-  --dls-accent-rgb: 59 130 246;
-  --dls-text-primary: #e5e7eb;
-  --dls-text-secondary: #9ca3af;
-  --dls-hover: #1f2937;
-  --dls-active: #374151;
-  --dls-shell-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
-  --dls-card-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
+  --dls-accent-rgb: 220 140 80;
 }
 
 /* inline code: background pill in both themes */
@@ -73,16 +81,5 @@
   padding: 0.1em 0.35em;
 }
 
-html,
-body {
-  height: 100%;
-  margin: 0;
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
-  background: var(--dls-app-bg);
-  color: var(--dls-text-primary);
-}
+/* html/body/#root base styles live in design.css and use the OKLCH
+   tokens. No overrides here — the design-system body rule wins. */

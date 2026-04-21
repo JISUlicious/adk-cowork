@@ -255,6 +255,7 @@ Only `name` + `description` are injected into the root agent's system prompt (a 
 - **Hook points**: `before_tool`, `after_tool`, `before_model`, `after_model`, `on_event`. Hooks are plain async Python callables registered in `policy/hooks.py`; they can mutate, block, or annotate. This is where audit logging, redaction, and rate-limiting live.
 - **Workspace sandbox**: every file tool is rooted at a `Workspace` dir; path traversal is rejected before the tool runs.
 - **Confirm-gated actions**: any tool marked `requires_confirmation=True` (email send, shell run outside allowlist, destructive file ops) emits a `confirmation_required` event; the surface (web/app) shows a modal; the tool only dispatches after an approval event returns. This is enforced in core, not in surfaces, so the CLI/TUI/app all inherit it.
+- **Notifications**: turn-complete, approval-needed, and error events are pushed onto a per-user `NotificationStore` (ephemeral, in-process) that the UI polls via `/v1/notifications`. Like approvals, the store lives outside ADK session state to avoid the OCC race on `session.last_update_time`; see `ARCHITECTURE.md §5`.
 
 ### 2.7 Transport protocol
 
@@ -326,7 +327,7 @@ The core does not know which mode it is in. Mode is a config file and a launcher
 │  │     ├─ <session-id>/
 │  │     │  ├─ transcript.jsonl       # ADK Event stream
 │  │     │  ├─ scratch/               # session-only files (drafts, generated plots)
-│  │     │  └─ session.toml           # title, created_at, model used
+│  │     │  └─ session.toml           # id, title, created_at, pinned
 │  │     └─ …
 │  └─ …
 └─ global/

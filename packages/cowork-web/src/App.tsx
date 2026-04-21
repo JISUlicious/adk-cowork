@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { CoworkClient } from "./transport/client";
 import { useChat } from "./hooks/useChat";
-import { TopBar } from "./components/TopBar";
-import { Sidebar } from "./components/Sidebar";
-import { DesktopSidebar } from "./components/DesktopSidebar";
-import { ChatPane } from "./components/ChatPane";
-import { FileCanvas } from "./components/FileCanvas";
-import { DesktopFileCanvas } from "./components/DesktopFileCanvas";
-import { StatusBar } from "./components/StatusBar";
+import { useNotifications } from "./hooks/useNotifications";
+import { Titlebar } from "./components/Titlebar";
+import { Sessions } from "./components/Sessions";
+import { Chat } from "./components/Chat";
+import { Canvas } from "./components/Canvas";
+import { CommandPalette, type PaletteScope } from "./components/CommandPalette";
+import { Settings } from "./components/Settings";
 import {
   copyIntoWorkdir,
   getRecentWorkdir,
@@ -40,12 +40,179 @@ function App({ baseUrl, token }: AppProps = {}) {
   const [project, setProject] = useState<string | null>(null);
   const [workdir, setWorkdir] = useState<string | null>(null);
   const [dropStatus, setDropStatus] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const { messages, sending, send, reset, newSession, resumeSession, sessionId } =
-    useChat(client);
+  const [lastEventAt, setLastEventAt] = useState<number | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const {
+    messages,
+    sending,
+    sendingIds,
+    waitingIds,
+    send,
+    reset,
+    newSession,
+    resumeSession,
+    sessionId,
+    agents,
+    decidedToolIds,
+    markToolDecided,
+    trustedToolNames,
+    markToolTrusted,
+  } = useChat(client);
 
   // Scope passed to useChat — determines managed vs local-dir session type.
   const scope = workdir ? { workdir } : project ? { project } : undefined;
+
+  const {
+    items: notifications,
+    unread: unreadNotifications,
+    refresh: refreshNotifications,
+    markRead: markNotificationRead,
+    clearAll: clearNotifications,
+  } = useNotifications(client);
+
+  const handleJumpFromNotification = async (sid: string) => {
+    if (!sid || sid === sessionId) return;
+    if (!scope) return;
+    try {
+      await resumeSession(sid, scope);
+    } catch {
+      /* already-deleted or unreachable — bell still clears */
+    }
+  };
+
+  // Bump the auto-saved stamp whenever the event timeline grows or mutates.
+  useEffect(() => {
+    if (messages.length) setLastEventAt(Date.now());
+  }, [messages]);
+
+  // Global ⌘K / Ctrl+K opens the command palette. Ignore when typing
+  // inside an input / textarea / contenteditable so the shortcut
+  // doesn't hijack natural text editing (e.g. the composer). The
+  // palette has its own listener for Escape + ↑↓ + Enter.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "k" && e.key !== "K") return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      setPaletteOpen((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const paletteScope: PaletteScope | null = workdir
+    ? { mode: "local", workdir }
+    : project
+      ? { mode: "managed", project }
+      : null;
+
+  const handleOpenFileFromPalette = (path: string) => {
+    // The Canvas pane owns its own file list and preview state; the
+    // palette can't reach in without extra plumbing, so we broadcast
+    // a request it can optionally honor. Canvas picks this up in a
+    // listener and opens the matching file in a new tab.
+    window.dispatchEvent(
+      new CustomEvent("cowork:palette-open-file", { detail: { path } }),
+    );
+  };
+
+  const handleJumpToMessage = (index: number) => {
+    const el = document.querySelector<HTMLElement>(`[data-msg-index="${index}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Brief flash so the user can locate the highlighted row. Inline
+    // rather than a CSS class so we don't have to introduce a new
+    // design-system rule for a one-shot affordance.
+    const prev = el.style.background;
+    el.style.transition = "background 240ms ease";
+    el.style.background = "var(--accent-soft, var(--paper-3))";
+    window.setTimeout(() => {
+      el.style.background = prev;
+    }, 900);
+  };
+
+  // Switch to ``projectSlug`` if it's not already active, then resume
+  // ``sid``. Local-dir surface ignores project switching (there is one
+  // project). Shared by palette handlers that need cross-session /
+  // cross-project navigation.
+  const resumeAcrossProject = async (
+    sid: string,
+    projectSlug?: string,
+  ): Promise<void> => {
+    if (projectSlug && surface === "web" && projectSlug !== project) {
+      handleSelectProject(projectSlug);
+      // ``resumeSession`` needs the new scope — the reset inside
+      // ``handleSelectProject`` clears messages, and React batches the
+      // state updates, so we await a microtask before resuming.
+      await Promise.resolve();
+      await resumeSession(sid, { project: projectSlug });
+      return;
+    }
+    const target = scope ?? (projectSlug ? { project: projectSlug } : null);
+    if (!target) return;
+    await resumeSession(sid, target);
+  };
+
+  const handlePalettePickSession = async (
+    sid: string,
+    projectSlug?: string,
+  ) => {
+    try {
+      await resumeAcrossProject(sid, projectSlug);
+    } catch (e) {
+      console.error("[cowork] palette session pick failed:", e);
+    }
+  };
+
+  const handlePalettePickFile = async (projectSlug: string, path: string) => {
+    if (surface === "desktop") return; // local mode doesn't switch projects
+    if (projectSlug !== project) handleSelectProject(projectSlug);
+    // Wait one microtask so the scope settles, then fire the open-file
+    // broadcast Canvas listens for.
+    await Promise.resolve();
+    window.dispatchEvent(
+      new CustomEvent("cowork:palette-open-file", { detail: { path } }),
+    );
+  };
+
+  const handlePalettePickSessionMessage = async (
+    sid: string,
+    index: number,
+    projectSlug?: string,
+  ) => {
+    try {
+      await resumeAcrossProject(sid, projectSlug);
+    } catch (e) {
+      console.error("[cowork] palette message pick failed:", e);
+      return;
+    }
+    // ``messages`` populates via SSE/history fetch after resumeSession;
+    // retry the scroll until the row lands. Cap the retries so a
+    // missing-index query doesn't loop forever.
+    let tries = 0;
+    const attempt = () => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-msg-index="${index}"]`,
+      );
+      if (el) {
+        handleJumpToMessage(index);
+        return;
+      }
+      tries += 1;
+      if (tries < 20) window.setTimeout(attempt, 100);
+    };
+    window.setTimeout(attempt, 60);
+  };
+
+  // Refresh notifications immediately when the sending state drops —
+  // that's when the server just emitted turn_complete (or confirmation /
+  // error) for the active session, and we don't want the bell to lag by
+  // up to 20 s behind the actual event. The hook's interval still
+  // covers background-tab and cross-session producers.
+  useEffect(() => {
+    if (!sending) void refreshNotifications();
+  }, [sending, refreshNotifications]);
 
   // On launch in desktop mode, reopen whatever folder the user had last.
   useEffect(() => {
@@ -123,10 +290,14 @@ function App({ baseUrl, token }: AppProps = {}) {
     send(text, scope);
   };
 
-  const handleApproveTool = async (toolName: string, _summary: string) => {
+  const handleApproveTool = async (
+    toolName: string,
+    _summary: string,
+    toolCallId?: string,
+  ) => {
     if (!sessionId) return;
     try {
-      await client.approveTool(sessionId, toolName);
+      await client.approveTool(sessionId, toolName, toolCallId);
     } catch (e) {
       console.error("[cowork] approveTool failed:", e);
     }
@@ -213,88 +384,138 @@ function App({ baseUrl, token }: AppProps = {}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reset]);
 
-  return (
-    <div className="h-[100dvh] min-h-screen w-full overflow-hidden bg-[var(--dls-app-bg)] text-[var(--dls-text-primary)] font-sans p-3 md:p-4">
-      <div className="flex h-full w-full gap-3 md:gap-4">
-        {/* Left sidebar */}
-        <aside
-          className={`${
-            sidebarOpen ? "flex" : "hidden"
-          } relative shrink-0 w-64 flex-col overflow-hidden rounded-[24px] border border-[var(--dls-border)] bg-[var(--dls-sidebar)] p-2.5 lg:flex`}
-        >
-          <div className="shrink-0 px-2 py-2 mb-2">
-            <span className="text-[15px] font-semibold text-[var(--dls-text-primary)]">
-              Cowork
-            </span>
-          </div>
-          <div className="flex min-h-0 flex-1">
-            {surface === "desktop" ? (
-              <DesktopSidebar
-                client={client}
-                workdir={workdir}
-                sessionId={sessionId}
-                onPickWorkdir={handlePickWorkdir}
-                onSelectSession={handleSelectSession}
-                onNewSession={handleNewSession}
-                onDeleteSession={handleDeleteSession}
-              />
-            ) : (
-              <Sidebar
-                client={client}
-                project={project}
-                sessionId={sessionId}
-                onSelectProject={handleSelectProject}
-                onSelectSession={handleSelectSession}
-                onNewSession={handleNewSession}
-                onDeleteSession={handleDeleteSession}
-                onDeleteProject={handleDeleteProject}
-              />
-            )}
-          </div>
-        </aside>
+  const userId = token ? token.split("-")[0] : undefined;
 
-        {/* Main panel — chat */}
-        <main className="min-w-0 flex-1 flex flex-col overflow-hidden rounded-[24px] border border-[var(--dls-border)] bg-[var(--dls-surface)] shadow-[var(--dls-shell-shadow)]">
-          <TopBar
+  return (
+    <div className="app">
+      <Titlebar
+        client={client}
+        project={project}
+        workdir={workdir}
+        sessionId={sessionId}
+        userId={userId}
+        lastEventAt={lastEventAt}
+        notifications={notifications}
+        unreadCount={unreadNotifications}
+        onMarkNotificationRead={markNotificationRead}
+        onClearNotifications={clearNotifications}
+        onJumpToSession={(sid) => void handleJumpFromNotification(sid)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
+      />
+      <div className="shell">
+        {surface === "desktop" ? (
+          <Sessions
+            mode="local"
+            client={client}
+            workdir={workdir}
+            sessionId={sessionId}
+            sendingIds={sendingIds}
+            waitingIds={waitingIds}
+            userId={userId}
+            onPickWorkdir={handlePickWorkdir}
+            onSelectSession={handleSelectSession}
+            onNewSession={handleNewSession}
+            onDeleteSession={handleDeleteSession}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenPalette={() => setPaletteOpen(true)}
+          />
+        ) : (
+          <Sessions
+            mode="managed"
             client={client}
             project={project}
             sessionId={sessionId}
-            onToggleSidebar={() => setSidebarOpen((v) => !v)}
+            sendingIds={sendingIds}
+            waitingIds={waitingIds}
+            userId={userId}
+            onSelectProject={handleSelectProject}
+            onSelectSession={handleSelectSession}
+            onNewSession={handleNewSession}
+            onDeleteSession={handleDeleteSession}
+            onDeleteProject={handleDeleteProject}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenPalette={() => setPaletteOpen(true)}
           />
-          <div className="flex-1 flex flex-col min-h-0">
-            <ChatPane
-              messages={messages}
-              sending={sending}
-              onSend={handleSend}
-              onApproveTool={handleApproveTool}
-            />
-          </div>
-          <StatusBar sessionId={sessionId} />
+        )}
+
+        <main className="pane chat">
+          <Chat
+            messages={messages}
+            sending={sending}
+            agents={agents}
+            sessionId={sessionId}
+            decidedToolIds={decidedToolIds}
+            onMarkToolDecided={markToolDecided}
+            trustedToolNames={trustedToolNames}
+            onMarkToolTrusted={markToolTrusted}
+            onSend={handleSend}
+            onApproveTool={handleApproveTool}
+            attach={
+              workdir
+                ? { mode: "local", workdir }
+                : project
+                  ? { mode: "managed", client, project }
+                  : undefined
+            }
+          />
         </main>
 
-        {/* Right panel — files. Web surface speaks the project API
-            (scratch/+files/ layout); desktop surface browses the
-            user-picked workdir. */}
-        <aside className="hidden xl:flex shrink-0 w-80 flex-col overflow-hidden rounded-[24px] border border-[var(--dls-border)] bg-[var(--dls-surface)] shadow-[var(--dls-card-shadow)]">
-          {surface === "desktop" ? (
-            <DesktopFileCanvas
-              client={client}
-              workdir={workdir}
-              sessionId={sessionId}
-            />
-          ) : (
-            <FileCanvas
-              client={client}
-              project={project}
-              sessionId={sessionId}
-            />
-          )}
-        </aside>
+        {surface === "desktop" ? (
+          <Canvas mode="local" client={client} workdir={workdir} sessionId={sessionId} />
+        ) : (
+          <Canvas mode="managed" client={client} project={project} sessionId={sessionId} />
+        )}
       </div>
 
-      {/* Drop status overlay */}
+      {settingsOpen && (
+        <Settings
+          client={client}
+          sessionId={sessionId}
+          userId={userId}
+          surface={surface === "desktop" ? "local" : "managed"}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        scope={paletteScope}
+        client={client}
+        messages={messages}
+        activeSessionId={sessionId}
+        onOpenFile={handleOpenFileFromPalette}
+        onJumpToMessage={handleJumpToMessage}
+        onPickSession={(sid, projectSlug) => {
+          void handlePalettePickSession(sid, projectSlug);
+        }}
+        onPickProjectFile={(projectSlug, path) => {
+          void handlePalettePickFile(projectSlug, path);
+        }}
+        onPickSessionMessage={(sid, index, projectSlug) => {
+          void handlePalettePickSessionMessage(sid, index, projectSlug);
+        }}
+      />
+
       {dropStatus && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 text-xs rounded-full bg-[var(--dls-surface)] border border-[var(--dls-border)] shadow-[var(--dls-shell-shadow)] text-[var(--dls-text-secondary)]">
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 50,
+            padding: "6px 14px",
+            fontSize: 12,
+            fontFamily: "var(--mono)",
+            borderRadius: 999,
+            background: "var(--paper-2)",
+            border: "1px solid var(--line)",
+            color: "var(--ink-2)",
+            boxShadow: "var(--shadow-lg, 0 10px 30px rgba(0,0,0,0.15))",
+          }}
+        >
           {dropStatus}
         </div>
       )}

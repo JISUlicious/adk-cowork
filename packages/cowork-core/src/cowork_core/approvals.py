@@ -14,11 +14,19 @@ same tool. They are **not** ADK session state:
 
 Interface is a protocol so a distributed deployment can swap in a
 Redis-backed store without touching routes or the permission callback.
+
+The separate ``ApprovalEventLog`` records each approval as a
+replayable envelope so the UI can mark the original tool call as
+decided on history fetch — without ever touching the ADK session's
+event list (which would collide with the runner's OCC-protected
+appends).
 """
 
 from __future__ import annotations
 
 import threading
+import time
+import uuid
 from typing import Protocol, runtime_checkable
 
 
@@ -71,3 +79,72 @@ class InMemoryApprovalStore:
     def clear(self, session_id: str) -> None:
         with self._lock:
             self._counts.pop(session_id, None)
+
+
+class InMemoryApprovalEventLog:
+    """Queue of approval decisions awaiting promotion into the session's
+    event list.
+
+    When the user hits Approve we can't safely ``append_event`` to the
+    ADK session from the HTTP handler — ``InMemorySessionService``
+    updates ``session.last_update_time`` on every append, and the
+    runner is appending against its own session handle throughout a
+    turn. An interleaved write from the route races the runner's next
+    append and trips the ``last_update_time`` check (see module
+    docstring).
+
+    Instead we:
+      1. record the approval here (and publish it on the bus for the
+         live UI),
+      2. drain this queue *inside* ``_run_turn`` before
+         ``runner.run_async`` starts — at that point no runner is
+         active for the session, so the write is safe and the event
+         joins the session's real event list.
+
+    The queued dict is wire-compatible with an ADK Event so the same
+    payload flows through the bus and the `session_service`.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: dict[str, list[dict]] = {}
+
+    def record(
+        self,
+        session_id: str,
+        tool_name: str,
+        tool_call_id: str,
+    ) -> dict:
+        """Queue an approval event and return the wire dict. The
+        ``id`` here is what gets persisted later in the session, so the
+        bus payload and the replayed history share the same identity
+        — clients can safely dedupe if they ever need to. """
+
+        event = {
+            "id": f"appr-{uuid.uuid4().hex[:16]}",
+            "author": "cowork-server",
+            "invocationId": "",
+            "timestamp": time.time(),
+            "actions": {
+                "stateDelta": {
+                    f"cowork:approval:{tool_call_id}": {
+                        "tool": tool_name,
+                        "status": "approved",
+                    },
+                },
+            },
+        }
+        with self._lock:
+            self._pending.setdefault(session_id, []).append(event)
+        return event
+
+    def drain(self, session_id: str) -> list[dict]:
+        """Pop and return all pending approvals for a session. Called
+        by ``_run_turn`` right before invoking the runner."""
+
+        with self._lock:
+            return self._pending.pop(session_id, [])
+
+    def clear(self, session_id: str) -> None:
+        with self._lock:
+            self._pending.pop(session_id, None)

@@ -109,6 +109,30 @@ class AuthConfig(BaseModel):
     keys: dict[str, str] = Field(default_factory=dict)
 
 
+class CompactionConfig(BaseModel):
+    """Knobs for ADK's native sliding-window + token-threshold compaction.
+
+    ADK handles scheduling, summary generation (via ``LlmEventSummarizer``),
+    and event bookkeeping; Cowork just supplies the thresholds and flips the
+    feature on. See ``google.adk.apps.EventsCompactionConfig``.
+    """
+
+    enabled: bool = True
+    compaction_interval: int = 6
+    """Run sliding-window compaction every N new user-initiated invocations."""
+
+    overlap_size: int = 1
+    """Invocations to carry over from the tail of the last compaction."""
+
+    token_threshold: int = 32000
+    """When the latest prompt-token estimate crosses this, ADK triggers an
+    inline mid-invocation compaction."""
+
+    event_retention_size: int = 20
+    """On token-threshold compaction, keep the last N raw events uncompacted
+    so recent turns remain verbatim in the agent's context."""
+
+
 class CoworkConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -118,6 +142,7 @@ class CoworkConfig(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
 
     @classmethod

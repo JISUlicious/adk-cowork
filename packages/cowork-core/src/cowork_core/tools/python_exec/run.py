@@ -74,8 +74,15 @@ def python_exec_run(
         return {"error": "code must be a non-empty string"}
     ctx = get_cowork_context(tool_context)
     timeout_sec = max(1, min(int(timeout_sec), 600))
+    # Temp script always lives under scratch so it's cleaned up and
+    # doesn't clutter the user's folder.
     scratch: Path = ctx.env.scratch_dir()
     scratch.mkdir(parents=True, exist_ok=True)
+    # CWD for the snippet follows the env: managed stays sandboxed
+    # inside scratch; local-dir runs from the user's workdir so
+    # ``os.getcwd()`` / relative paths match the folder the agent was
+    # told about.
+    run_cwd: Path = ctx.env.agent_cwd()
 
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -92,7 +99,7 @@ def python_exec_run(
     try:
         proc = subprocess.run(
             [sys.executable, str(script_path)],
-            cwd=scratch,
+            cwd=run_cwd,
             capture_output=True,
             timeout=timeout_sec,
             shell=False,

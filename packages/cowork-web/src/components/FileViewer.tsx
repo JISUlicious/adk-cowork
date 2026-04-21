@@ -24,13 +24,19 @@ interface Props {
   project: string;
   path: string;
   name: string;
+  /** ``rendered`` (default) shows the converted preview (HTML for
+   *  markdown, table for CSV, etc.). ``code`` fetches the raw bytes
+   *  from the same endpoint with ``?raw=1`` and shows them as text.
+   *  Images ignore the flag and always render as the image. */
+  view?: "rendered" | "code";
 }
 
-export function FileViewer({ client, project, path, name }: Props) {
+export function FileViewer({ client, project, path, name, view = "rendered" }: Props) {
   const ext = name.split(".").pop()?.toLowerCase() || "";
   const url = client.previewUrl(project, path);
+  const rawUrl = `${url}?raw=1`;
 
-  // Images: direct passthrough
+  // Images: direct passthrough regardless of view toggle.
   if (["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"].includes(ext)) {
     return (
       <div className="p-4 flex justify-center">
@@ -43,9 +49,15 @@ export function FileViewer({ client, project, path, name }: Props) {
     );
   }
 
-  // Everything else: fetch from preview endpoint
   const isDark = useIsDark();
-  return <PreviewFetcher url={url} ext={ext} isDark={isDark} />;
+  return (
+    <PreviewFetcher
+      url={view === "code" ? rawUrl : url}
+      ext={ext}
+      isDark={isDark}
+      forceText={view === "code"}
+    />
+  );
 }
 
 const DARK_OVERRIDE =
@@ -71,10 +83,12 @@ function PreviewFetcher({
   url,
   ext,
   isDark,
+  forceText,
 }: {
   url: string;
   ext: string;
   isDark: boolean;
+  forceText?: boolean;
 }) {
   const [data, setData] = useState<string | null>(null);
   const [contentType, setContentType] = useState("");
@@ -106,6 +120,11 @@ function PreviewFetcher({
     );
   }
 
+  // Code view forces the raw text path regardless of server content-type.
+  if (forceText) {
+    return <CodeBlock content={data} />;
+  }
+
   // HTML preview (markdown). Inject the current theme before rendering in
   // the sandboxed iframe so it follows the app theme, not the OS preference.
   if (contentType.includes("text/html")) {
@@ -114,7 +133,7 @@ function PreviewFetcher({
         title="preview"
         srcDoc={injectTheme(data, isDark)}
         sandbox=""
-        className="w-full h-full min-h-[60vh] border-0"
+        style={{ flex: 1, width: "100%", minHeight: 0, border: 0 }}
       />
     );
   }

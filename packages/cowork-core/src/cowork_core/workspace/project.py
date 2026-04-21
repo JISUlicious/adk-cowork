@@ -11,6 +11,7 @@ See ``SPEC.md`` §2.11.1 for the on-disk layout this module bootstraps.
 from __future__ import annotations
 
 import re
+import threading
 import tomllib
 import uuid
 from dataclasses import dataclass, field
@@ -18,6 +19,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from typing import Protocol, runtime_checkable
+
+# Serialises ``session.toml`` writes from concurrent handlers (e.g. two
+# PATCHes toggling ``pinned`` on different sessions). Process-local;
+# multi-worker deployments will want a filesystem lock instead.
+_session_toml_lock = threading.Lock()
 
 from cowork_core.workspace.workspace import Workspace, WorkspaceError
 
@@ -68,6 +74,7 @@ class Session:
     root: Path
     created_at: str
     title: str | None = None
+    pinned: bool = False
 
     @property
     def scratch_dir(self) -> Path:
@@ -96,6 +103,9 @@ class ProjectRegistryBase(Protocol):
     def get_or_create(self, name: str) -> Project: ...
     def new_session(self, project_slug: str, title: str | None = None) -> Session: ...
     def get_session(self, project_slug: str, session_id: str) -> Session: ...
+    def set_session_pinned(
+        self, project_slug: str, session_id: str, pinned: bool,
+    ) -> Session: ...
     def delete_session(self, project_slug: str, session_id: str) -> None: ...
     def delete_project(self, slug: str) -> None: ...
 
@@ -157,7 +167,12 @@ class ProjectRegistry:
         created = _utcnow_iso()
         _write_toml(
             root / "session.toml",
-            {"id": session_id, "title": title or "", "created_at": created},
+            {
+                "id": session_id,
+                "title": title or "",
+                "created_at": created,
+                "pinned": False,
+            },
         )
         (root / "transcript.jsonl").touch()
         return Session(
@@ -166,6 +181,7 @@ class ProjectRegistry:
             root=root,
             created_at=created,
             title=title,
+            pinned=False,
         )
 
     def get_session(self, project_slug: str, session_id: str) -> Session:
@@ -182,7 +198,38 @@ class ProjectRegistry:
             root=root,
             created_at=data["created_at"],
             title=data.get("title") or None,
+            pinned=bool(data.get("pinned", False)),
         )
+
+    def set_session_pinned(
+        self, project_slug: str, session_id: str, pinned: bool,
+    ) -> Session:
+        """Update only the ``pinned`` bit of a session's TOML.
+
+        Read-modify-write guarded by a process-local lock so two
+        concurrent toggles don't lose each other's changes. Returns
+        the updated ``Session`` record.
+        """
+
+        with _session_toml_lock:
+            current = self.get_session(project_slug, session_id)
+            _write_toml(
+                current.toml_path,
+                {
+                    "id": current.id,
+                    "title": current.title or "",
+                    "created_at": current.created_at,
+                    "pinned": bool(pinned),
+                },
+            )
+            return Session(
+                id=current.id,
+                project_slug=project_slug,
+                root=current.root,
+                created_at=current.created_at,
+                title=current.title,
+                pinned=bool(pinned),
+            )
 
     def delete_session(self, project_slug: str, session_id: str) -> None:
         """Remove a session directory entirely."""
@@ -235,8 +282,18 @@ class ProjectRegistry:
         )
 
 
-def _write_toml(path: Path, data: dict[str, str]) -> None:
-    lines = [f'{key} = "{_escape(value)}"\n' for key, value in data.items()]
+def _write_toml(path: Path, data: dict[str, str | bool]) -> None:
+    """Minimal TOML writer — only supports string and bool scalars, which
+    is all ``project.toml`` / ``session.toml`` need today. If we ever
+    need more (ints, lists, tables), switch to ``tomli-w`` or similar.
+    """
+
+    lines: list[str] = []
+    for key, value in data.items():
+        if isinstance(value, bool):
+            lines.append(f"{key} = {'true' if value else 'false'}\n")
+        else:
+            lines.append(f'{key} = "{_escape(value)}"\n')
     path.write_text("".join(lines), encoding="utf-8")
 
 

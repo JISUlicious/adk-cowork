@@ -73,6 +73,14 @@ class LocalDirExecEnv:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
+    def agent_cwd(self) -> Path:
+        # Local-dir mode: the user picked this folder specifically for
+        # the agent to work in. Running snippets from the hidden
+        # ``.cowork/sessions/.../scratch`` would confuse the agent
+        # (``os.getcwd()`` wouldn't match the workdir it was told
+        # about). Run them from the workdir root instead.
+        return self._resolved_workdir
+
     def namespaces(self) -> list[str]:
         return [""]
 
@@ -82,6 +90,9 @@ class LocalDirExecEnv:
             f"- You are working in `{self._resolved_workdir}`.\n"
             f"- All paths are relative to this directory. "
             f"Example: `fs_read(\"draft.md\")`.\n"
+            f"- `python_exec_run` and `shell_run` execute with cwd set "
+            f"to this workdir — plain `open(\"data.csv\")` or "
+            f"`pathlib.Path(\"data.csv\")` resolves against it.\n"
             f"- The directory `.cowork/` is reserved for session scratch — "
             f"ignore it when listing files."
         )

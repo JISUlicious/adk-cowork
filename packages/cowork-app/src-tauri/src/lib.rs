@@ -74,6 +74,24 @@ async fn pick_workdir(app: AppHandle) -> Result<Option<String>, String> {
     Ok(picked.map(|p| p.to_string()))
 }
 
+/// Native multi-file picker for composer attachments. Returns the list
+/// of absolute paths the user selected, or an empty list if cancelled.
+#[tauri::command]
+async fn pick_files(app: AppHandle) -> Result<Vec<String>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog().file().pick_files(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        rx.recv().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(picked
+        .map(|v| v.into_iter().map(|p| p.to_string()).collect())
+        .unwrap_or_default())
+}
+
 /// Remember the most-recent workdir so the UI can re-open it on next launch.
 /// Stored in memory only for v1 — persistence is a future add.
 #[derive(Default)]
@@ -186,6 +204,7 @@ pub fn run() {
             read_dropped_file,
             copy_into_workdir,
             pick_workdir,
+            pick_files,
             recent_workdir,
             set_recent_workdir
         ])

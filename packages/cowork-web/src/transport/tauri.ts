@@ -99,6 +99,29 @@ export async function setRecentWorkdir(path: string): Promise<void> {
   }
 }
 
+/** Native multi-file picker for composer attachments. Returns the list
+ *  of absolute paths the user selected, or an empty list if cancelled
+ *  or not in Tauri. */
+export async function pickFiles(): Promise<string[]> {
+  if (!isTauri()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    return (await invoke<string[]>("pick_files")) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Read the raw bytes of a local absolute path. Wraps the Rust
+ *  ``read_dropped_file`` command so the composer's attach flow can reuse
+ *  the same plumbing as native file-drop in managed mode. */
+export async function readLocalFileBytes(path: string): Promise<Uint8Array> {
+  if (!isTauri()) throw new Error("readLocalFileBytes: not in Tauri");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const bytes = await invoke<number[]>("read_dropped_file", { path });
+  return new Uint8Array(bytes);
+}
+
 /** Copy a dropped file into the current workdir (desktop mode).
  *  Returns the destination absolute path, or throws. */
 export async function copyIntoWorkdir(

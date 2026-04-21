@@ -7,9 +7,11 @@ ConnectionLimiter) so backends can be swapped without touching routes.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from cowork_core import CoworkConfig, CoworkRuntime, PreviewCache, build_runtime
+from cowork_core.runner import APP_NAME
 from fastapi import (
     Depends,
     FastAPI,
@@ -22,6 +24,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from google.adk.events.event import Event
+from google.adk.events.event_actions import EventActions
 from google.genai import types as genai_types
 
 from cowork_server.auth import UserIdentity, create_guard, generate_token
@@ -82,6 +85,13 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             },
             "tools": runtime.tools.names(),
             "skills": runtime.skills.names(),
+            "compaction": {
+                "enabled": cfg.compaction.enabled,
+                "compaction_interval": cfg.compaction.compaction_interval,
+                "overlap_size": cfg.compaction.overlap_size,
+                "token_threshold": cfg.compaction.token_threshold,
+                "event_retention_size": cfg.compaction.event_retention_size,
+            },
         }
 
     # ── Policy (per-session, falls back to server default) ─────────────
@@ -190,11 +200,16 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     ) -> dict[str, Any]:
         """Grant one approval for a tool name.
 
-        Body: ``{"tool": "python_exec_run"}``. The permission callback
-        consumes the approval on the next invocation of that tool, so one
-        POST allows exactly one subsequent call.
+        Body: ``{"tool": "python_exec_run", "tool_call_id": "fc_xyz"}``.
+        The permission callback consumes the approval on the next
+        invocation of that tool, so one POST allows exactly one subsequent
+        call. When ``tool_call_id`` is supplied we also append an ADK
+        approval event to the session so history replay can mark that
+        specific call as resolved — the UI then doesn't re-prompt for an
+        approval the user already acted on.
         """
         tool = body.get("tool", "")
+        tool_call_id = body.get("tool_call_id") or ""
         if not isinstance(tool, str) or not tool:
             raise HTTPException(status_code=400, detail="'tool' is required")
         try:
@@ -203,7 +218,95 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        if isinstance(tool_call_id, str) and tool_call_id:
+            # Record the approval in a side-channel log (never ADK
+            # session state — that would race the runner's OCC-guarded
+            # appends and trip ``last_update_time`` errors mid-turn,
+            # per ``cowork_core/approvals.py``). The log is
+            # wire-compatible with ADK events so transport layers can
+            # serve it via ``/history`` and publish it live.
+            ev_payload = runtime.approval_log.record(
+                session_id=session_id,
+                tool_name=tool,
+                tool_call_id=tool_call_id,
+            )
+            import json as _json
+
+            await bus.publish(session_id, _json.dumps(ev_payload))
+
         return {"tool": tool, "remaining": remaining}
+
+    # ── Notifications ──────────────────────────────────────────────────
+
+    @app.get("/v1/notifications")
+    async def list_notifications(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Most-recent-first notifications for the authenticated user.
+
+        Ephemeral: the store lives in process memory, so a server
+        restart wipes unread notifications. Persistence would add
+        complexity without a clear win while the runtime is
+        single-process — revisit when we scale out.
+        """
+        notes = runtime.notifications.list(user.user_id)
+        return {"notifications": [n.to_wire() for n in notes]}
+
+    @app.post("/v1/notifications/{notification_id}/read")
+    async def mark_notification_read(
+        notification_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        ok = runtime.notifications.mark_read(user.user_id, notification_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="notification not found")
+        return {"id": notification_id, "read": True}
+
+    @app.delete("/v1/notifications")
+    async def clear_notifications(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, int]:
+        removed = runtime.notifications.clear(user.user_id)
+        return {"cleared": removed}
+
+    # ── Global search (⌘K palette — F.P6b) ────────────────────────────
+
+    @app.get("/v1/search")
+    async def search(
+        q: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Naive cross-project substring search for the ⌘K palette.
+
+        Three sections — ``sessions`` (by title), ``files`` (by path,
+        scoped to each project's ``files/`` artifact dir), and
+        ``messages`` (by event text). Each section is capped at 50 so a
+        runaway query can't lock the server; message scanning is
+        additionally limited to the 15 most-recent sessions per project
+        because it's the only section that pulls full event lists.
+
+        Results are cached per ``(user_id, q.lower())`` for 30 seconds
+        so repeated keystrokes (debounced from the client) share work.
+        """
+        q_lower = q.strip().lower()
+        if not q_lower:
+            return {"sessions": [], "files": [], "messages": []}
+
+        key = (user.user_id, q_lower)
+        now = time.time()
+        cached = _search_cache.get(key)
+        if cached is not None and now - cached[0] < _SEARCH_CACHE_TTL:
+            return cached[1]
+
+        result = await _run_search(runtime, user.user_id, q_lower)
+        _search_cache[key] = (now, result)
+        # Simple bounded cache — a manual reset is cheaper than LRU
+        # bookkeeping for what's expected to be a handful of active
+        # queries at a time.
+        if len(_search_cache) > _SEARCH_CACHE_SIZE:
+            _search_cache.clear()
+        return result
 
     # ── Sessions ───────────────────────────────────────────────────────
 
@@ -324,14 +427,27 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         for child in sorted(abspath.iterdir()):
             if child.name == ".cowork":
                 continue  # bookkeeping, not user content
-            if child.is_dir():
-                entries.append({"name": child.name, "kind": "dir", "size": None})
-            else:
-                try:
-                    size = child.stat().st_size
-                except OSError:
-                    size = None
-                entries.append({"name": child.name, "kind": "file", "size": size})
+            # Hide OS / editor noise the user wouldn't create on purpose
+            # (``.DS_Store`` on macOS, ``Thumbs.db`` on Windows, etc.).
+            # Dotfiles in general stay hidden by default — the agent can
+            # still reach them via fs tools if needed.
+            if child.name.startswith("."):
+                continue
+            if child.name in {"Thumbs.db", "desktop.ini"}:
+                continue
+            try:
+                stat = child.stat()
+                mtime: float | None = stat.st_mtime
+                size: int | None = stat.st_size if child.is_file() else None
+            except OSError:
+                mtime = None
+                size = None
+            entries.append({
+                "name": child.name,
+                "kind": "dir" if child.is_dir() else "file",
+                "size": size,
+                "modified": mtime,
+            })
         return {"path": path or ".", "entries": entries}
 
     @app.get("/v1/local-files/content")
@@ -380,9 +496,42 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 "id": s.id,
                 "created_at": s.created_at,
                 "title": s.title,
+                "pinned": s.pinned,
             }
             for s in sessions
         ]
+
+    @app.patch("/v1/local-sessions/{session_id}")
+    async def patch_local_session(
+        session_id: str,
+        workdir: str,
+        body: dict[str, Any],
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Mutate a local-dir session's metadata. Mirrors managed
+        ``PATCH /v1/projects/{slug}/sessions/{id}`` — today only
+        ``pinned`` is supported. Path-confinement is handled inside
+        the runtime helper (it resolves under ``<workdir>/.cowork``)."""
+
+        from pathlib import Path as _P
+
+        pinned = body.get("pinned")
+        if pinned is None:
+            raise HTTPException(status_code=400, detail="'pinned' is required")
+        if not isinstance(pinned, bool):
+            raise HTTPException(status_code=400, detail="'pinned' must be a bool")
+        try:
+            session = runtime.set_local_session_pinned(
+                _P(workdir), session_id, pinned,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "id": session.id,
+            "title": session.title,
+            "created_at": session.created_at,
+            "pinned": session.pinned,
+        }
 
     @app.delete("/v1/local-sessions/{session_id}")
     async def delete_local_session_endpoint(
@@ -407,7 +556,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     ) -> dict[str, str]:
         text = body.get("text", "")
         task = asyncio.create_task(
-            _run_turn(runtime.runner, bus, session_id, str(text), user.user_id)
+            _run_turn(runtime, bus, session_id, str(text), user.user_id)
         )
         # Fire-and-forget — errors are published as events
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
@@ -525,8 +674,42 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                     "id": data.get("id", entry.name),
                     "title": data.get("title") or None,
                     "created_at": data.get("created_at", ""),
+                    "pinned": bool(data.get("pinned", False)),
                 })
         return result
+
+    @app.patch("/v1/projects/{project}/sessions/{session_id}")
+    async def patch_session(
+        project: str,
+        session_id: str,
+        body: dict[str, Any],
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Mutate a session's ``session.toml`` metadata.
+
+        Only ``pinned`` is supported today; ``title`` is accepted for
+        future use and currently ignored. Full-rewrite under a
+        process-local lock in ``ProjectRegistry.set_session_pinned`` so
+        concurrent PATCHes don't race.
+        """
+
+        pinned = body.get("pinned")
+        if pinned is None:
+            raise HTTPException(status_code=400, detail="'pinned' is required")
+        if not isinstance(pinned, bool):
+            raise HTTPException(status_code=400, detail="'pinned' must be a bool")
+        try:
+            session = runtime.registry_for(user.user_id).set_session_pinned(
+                project, session_id, pinned,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "id": session.id,
+            "title": session.title,
+            "created_at": session.created_at,
+            "pinned": session.pinned,
+        }
 
     @app.delete("/v1/projects/{project}")
     async def delete_project(
@@ -602,6 +785,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     async def preview_file(
         project: str,
         path: str,
+        raw: int = 0,
         user: UserIdentity = Depends(guard),
     ) -> Response:
         try:
@@ -610,6 +794,19 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not full_path.is_file():
             raise HTTPException(status_code=404, detail=f"file not found: {path}")
+        # Raw mode: bypass the converter pipeline and return the original
+        # bytes. Used by the UI's "view code" toggle for files that would
+        # otherwise render (e.g. markdown → HTML). Capped at 2 MB so a
+        # casual click never blows up the tab on a giant file.
+        if raw:
+            try:
+                size = full_path.stat().st_size
+            except OSError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if size > 2 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="file too large for raw view")
+            data = full_path.read_bytes()
+            return Response(content=data, media_type="text/plain; charset=utf-8")
         try:
             result = preview_cache.get(full_path)
         except ValueError as exc:
@@ -628,15 +825,283 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 _SERVER_AUTHOR = "cowork-server"
 
 
+async def _flush_pending_approvals(
+    runtime: CoworkRuntime,
+    session_id: str,
+    user_id: str,
+    bus: InMemoryEventBus,
+) -> None:
+    """Promote queued approval events into the session's event list.
+
+    Called at the start of ``_run_turn`` — the only place we can
+    ``append_event`` to the session without racing the runner. Each
+    queued entry becomes a real ADK ``Event``, so history fetches and
+    later replays see approvals inline with model/tool events rather
+    than as a side channel.
+    """
+
+    pending = runtime.approval_log.drain(session_id)
+    if not pending:
+        return
+    session = await runtime.runner.session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id,
+    )
+    if session is None:
+        return
+    for entry in pending:
+        state_delta = (entry.get("actions") or {}).get("stateDelta") or {}
+        ev = Event(
+            id=str(entry.get("id") or ""),
+            author=_SERVER_AUTHOR,
+            invocation_id="",
+            actions=EventActions(state_delta=dict(state_delta)),
+        )
+        try:
+            await runtime.runner.session_service.append_event(
+                session=session, event=ev,
+            )
+        except Exception as exc:
+            import sys
+
+            print(
+                f"[cowork-server] approval persist failed ({session_id}): {exc!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+
+
+# Search cache — keyed by ``(user_id, query_lower)``. 30 s TTL is long
+# enough to absorb a debounced typing burst, short enough that a newly
+# created session / renamed file shows up promptly on the next open.
+_SEARCH_CACHE_TTL = 30.0
+_SEARCH_CACHE_SIZE = 128
+# Cap per section so a runaway query doesn't hand back a megabyte of
+# JSON or keep the server busy scanning forever. Message scan is extra-
+# limited because it's the only section that pulls full event lists.
+_SEARCH_MAX_RESULTS = 50
+_SEARCH_MESSAGE_SESSION_LIMIT = 15
+_search_cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+
+
+def _snippet(text: str, needle: str, radius: int = 48) -> str:
+    """Return a short preview of ``text`` centered on the first
+    case-insensitive occurrence of ``needle``. Whitespace is normalized
+    so multi-line tool output doesn't bloat the preview."""
+
+    lower = text.lower()
+    idx = lower.find(needle)
+    if idx < 0:
+        return text[:100]
+    start = max(0, idx - radius)
+    end = min(len(text), idx + len(needle) + radius)
+    prefix = "… " if start > 0 else ""
+    suffix = " …" if end < len(text) else ""
+    core = text[start:end].replace("\r", " ").replace("\n", " ")
+    return f"{prefix}{' '.join(core.split())}{suffix}"
+
+
+async def _run_search(
+    runtime: CoworkRuntime,
+    user_id: str,
+    q_lower: str,
+) -> dict[str, Any]:
+    """Scan the user's projects for sessions / files / messages matching
+    ``q_lower``. Purely naive iteration — acceptable while the server is
+    single-process; a proper index is future work."""
+
+    import tomllib
+
+    session_hits: list[dict[str, Any]] = []
+    file_hits: list[dict[str, Any]] = []
+    message_hits: list[dict[str, Any]] = []
+
+    registry = runtime.registry_for(user_id)
+    projects = registry.list()
+
+    for project in projects:
+        if (
+            len(session_hits) >= _SEARCH_MAX_RESULTS
+            and len(file_hits) >= _SEARCH_MAX_RESULTS
+            and len(message_hits) >= _SEARCH_MAX_RESULTS
+        ):
+            break
+
+        sessions_dir = project.sessions_dir
+        session_metas: list[dict[str, Any]] = []
+        if sessions_dir.is_dir():
+            for entry in sorted(sessions_dir.iterdir()):
+                toml_path = entry / "session.toml"
+                if not toml_path.exists():
+                    continue
+                try:
+                    with toml_path.open("rb") as f:
+                        data = tomllib.load(f)
+                except Exception:
+                    continue
+                session_metas.append({
+                    "id": data.get("id", entry.name),
+                    "title": data.get("title") or "",
+                    "created_at": data.get("created_at", ""),
+                })
+
+        # Session-title matches are cheap — scan every session.
+        for meta in session_metas:
+            if len(session_hits) >= _SEARCH_MAX_RESULTS:
+                break
+            title = str(meta.get("title") or "")
+            if q_lower in title.lower():
+                session_hits.append({
+                    "session_id": meta["id"],
+                    "title": title or None,
+                    "project": project.slug,
+                })
+
+        # File-name matches scoped to the artifact dir only. ``scratch/``
+        # and ``sessions/`` are runtime bookkeeping; surfacing them in
+        # global search would add noise without user value.
+        files_dir = project.root / "files"
+        if files_dir.is_dir():
+            for child in files_dir.rglob("*"):
+                if len(file_hits) >= _SEARCH_MAX_RESULTS:
+                    break
+                if not child.is_file():
+                    continue
+                rel = child.relative_to(project.root).as_posix()
+                if q_lower in rel.lower():
+                    file_hits.append({
+                        "project": project.slug,
+                        "path": rel,
+                        "name": child.name,
+                    })
+
+        # Message scan — bounded hard because this is the expensive
+        # section. Cap per-project sessions scanned so a project with
+        # 500 sessions doesn't starve other projects.
+        session_metas.sort(key=lambda m: str(m.get("created_at", "")), reverse=True)
+        for meta in session_metas[:_SEARCH_MESSAGE_SESSION_LIMIT]:
+            if len(message_hits) >= _SEARCH_MAX_RESULTS:
+                break
+            sid = str(meta["id"])
+            try:
+                existing = await runtime.runner.session_service.get_session(
+                    app_name=APP_NAME, user_id=user_id, session_id=sid,
+                )
+            except Exception:
+                continue
+            if existing is None:
+                continue
+            events = getattr(existing, "events", []) or []
+            for index, ev in enumerate(events):
+                if len(message_hits) >= _SEARCH_MAX_RESULTS:
+                    break
+                content = getattr(ev, "content", None)
+                if content is None:
+                    continue
+                parts = getattr(content, "parts", None) or []
+                blob_parts: list[str] = []
+                for p in parts:
+                    txt = getattr(p, "text", None)
+                    if isinstance(txt, str) and txt:
+                        blob_parts.append(txt)
+                if not blob_parts:
+                    continue
+                blob = "\n".join(blob_parts)
+                if q_lower in blob.lower():
+                    message_hits.append({
+                        "session_id": sid,
+                        "session_title": str(meta.get("title") or "") or None,
+                        "project": project.slug,
+                        "index": index,
+                        "preview": _snippet(blob, q_lower),
+                    })
+
+    return {
+        "sessions": session_hits,
+        "files": file_hits,
+        "messages": message_hits,
+    }
+
+
+def _notify_from_event(
+    runtime: CoworkRuntime,
+    event: Event,
+    session_id: str,
+    user_id: str,
+) -> None:
+    """Inspect one ADK event and push any user-visible notifications.
+
+    Three triggers:
+
+    * ``confirmation_required`` on a tool response — a gated tool is
+      waiting for an explicit Approve click.
+    * ``error_code`` on the event — ADK or the runner reported a turn
+      failure.
+    * ``turn_complete`` without an error — the session has nothing left
+      running, worth announcing when the user is looking elsewhere.
+
+    Writes only to ``runtime.notifications`` and never to the ADK
+    session; same rationale as approvals (see ``notifications.py``).
+    """
+
+    content = getattr(event, "content", None)
+    if content is not None:
+        for part in getattr(content, "parts", None) or []:
+            fr = getattr(part, "function_response", None)
+            if not fr:
+                continue
+            resp = getattr(fr, "response", None)
+            if isinstance(resp, dict) and resp.get("confirmation_required"):
+                tool = getattr(fr, "name", None) or "tool"
+                runtime.notifications.add(
+                    user_id,
+                    "approval_needed",
+                    f"{tool} needs approval",
+                    session_id=session_id,
+                )
+
+    error_code = getattr(event, "error_code", None)
+    if error_code:
+        msg = getattr(event, "error_message", "") or "turn failed"
+        runtime.notifications.add(
+            user_id,
+            "error",
+            f"{error_code}: {msg}",
+            session_id=session_id,
+        )
+        return
+
+    if getattr(event, "turn_complete", False):
+        runtime.notifications.add(
+            user_id,
+            "turn_complete",
+            "Turn complete",
+            session_id=session_id,
+        )
+
+
 async def _run_turn(
-    runner: Any,
+    runtime: CoworkRuntime,
     bus: InMemoryEventBus,
     session_id: str,
     text: str,
     user_id: str = "local",
 ) -> None:
-    """Drive one ADK run and publish each Event (JSON) to the bus."""
+    """Drive one ADK run and publish each Event (JSON) to the bus.
+
+    Before the runner starts, any approvals the user queued via the
+    ``/approvals`` endpoint are promoted from the side-channel log
+    into the session's real event list via ``append_event``. This is
+    the only place we can safely write approval events — the runner
+    isn't active yet, so there's no OCC race with its internal
+    appends.
+    """
+
     import sys
+
+    runner = runtime.runner
+    await _flush_pending_approvals(runtime, session_id, user_id, bus)
+
     content = genai_types.Content(role="user", parts=[genai_types.Part(text=text)])
     event_count = 0
     last_event: Event | None = None
@@ -646,6 +1111,7 @@ async def _run_turn(
         ):
             event_count += 1
             last_event = event
+            _notify_from_event(runtime, event, session_id, user_id)
             await bus.publish(session_id, event_to_payload(event))
     except Exception as e:
         print(f"[cowork-server] run_turn error: {e!r}", file=sys.stderr, flush=True)
@@ -656,6 +1122,7 @@ async def _run_turn(
             error_message=str(e),
             turn_complete=True,
         )
+        _notify_from_event(runtime, err, session_id, user_id)
         await bus.publish(session_id, event_to_payload(err))
         return
     finally:
@@ -667,4 +1134,7 @@ async def _run_turn(
             invocation_id=getattr(last_event, "invocation_id", "") or "",
             turn_complete=True,
         )
+        # Synthesized sentinel: fire the turn_complete notification here
+        # since the real last event didn't carry the flag.
+        _notify_from_event(runtime, sentinel, session_id, user_id)
         await bus.publish(session_id, event_to_payload(sentinel))

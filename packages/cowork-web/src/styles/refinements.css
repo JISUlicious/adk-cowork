@@ -1,0 +1,224 @@
+/* Cowork — refinement variants
+ *
+ * Three visual directions, toggled via data-refinement="…" on .app:
+ *   · editorial (default) — the current look, subtle tweaks
+ *   · soft                — layered warm surfaces, softer borders, generous serif
+ *   · mono                — flat monochrome, accent reserved for focus/state
+ */
+
+/* ============================================================
+   V1 · EDITORIAL (subtle baseline polish)
+   ============================================================ */
+[data-refinement="editorial"] {
+  /* tightens the default look by very slightly cooling lines and
+     lifting the paper surface — reads as the current design, clean. */
+}
+[data-refinement="editorial"] .chat-head,
+[data-refinement="editorial"] .canvas-head {
+  background: var(--paper);
+}
+[data-refinement="editorial"] .msg-user-bubble {
+  border-radius: 10px 10px 3px 10px;
+}
+[data-refinement="editorial"] .sessions .sess.active {
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent);
+  padding-left: 10px;
+}
+
+/* ============================================================
+   V2 · SOFT (layered, warm, editorial-forward)
+   ============================================================ */
+[data-refinement="soft"] {
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-lg: 14px;
+}
+[data-refinement="soft"] .sessions { background: var(--paper); }
+[data-refinement="soft"] .chat { background: var(--paper-2); }
+[data-refinement="soft"] .canvas { background: var(--paper); }
+
+/* layered chat messages on cards */
+[data-refinement="soft"] .chat-inner { padding-top: 8px; }
+[data-refinement="soft"] .msg {
+  padding: 14px 16px;
+  margin: 8px 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+[data-refinement="soft"] .msg-user-bubble {
+  border-radius: 14px 14px 4px 14px;
+  padding: 11px 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* softer, more editorial type */
+[data-refinement="soft"] .msg .by > span:first-child,
+[data-refinement="soft"] .sessions .sess .title {
+  font-family: var(--serif);
+  font-size: 15px;
+  letter-spacing: -0.005em;
+}
+[data-refinement="soft"] .sec h3 { font-size: 22px; }
+[data-refinement="soft"] .md-preview h1 { font-size: 42px; }
+[data-refinement="soft"] .md-preview { padding: 48px 56px 72px; }
+
+/* buttons & chips: pill */
+[data-refinement="soft"] .btn-sm { border-radius: 999px; padding: 5px 14px; }
+[data-refinement="soft"] .chip { border-radius: 999px; }
+[data-refinement="soft"] .tool {
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+[data-refinement="soft"] .artifact-ref {
+  border-radius: 999px;
+  padding: 4px 12px 4px 4px;
+  background: var(--paper-3);
+  border-color: transparent;
+}
+
+/* canvas file cards get more air */
+[data-refinement="soft"] .fcard {
+  border-radius: var(--radius);
+  background: var(--paper-2);
+  box-shadow: var(--shadow-sm);
+}
+
+/* composer: floating card */
+[data-refinement="soft"] .composer {
+  border-top: 0;
+  padding: 10px 18px 18px;
+}
+[data-refinement="soft"] .composer-inner {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px 6px;
+  box-shadow: var(--shadow);
+}
+
+/* ============================================================
+   V3 · MONO (flat, quiet, accent reserved for focus)
+   ============================================================ */
+[data-refinement="mono"] {
+  --radius: 3px;
+  --radius-sm: 2px;
+  --radius-lg: 4px;
+}
+
+/* desaturate surfaces — kill the warm tint */
+[data-refinement="mono"][data-theme="light"] {
+  --paper: oklch(0.99 0 0);
+  --paper-2: oklch(0.97 0 0);
+  --paper-3: oklch(0.94 0 0);
+  --paper-4: oklch(0.90 0 0);
+  --ink: oklch(0.18 0 0);
+  --ink-2: oklch(0.38 0 0);
+  --ink-3: oklch(0.58 0 0);
+  --ink-4: oklch(0.72 0 0);
+  --line: oklch(0.90 0 0);
+  --line-2: oklch(0.82 0 0);
+}
+[data-refinement="mono"][data-theme="dark"] {
+  --paper: oklch(0.13 0 0);
+  --paper-2: oklch(0.17 0 0);
+  --paper-3: oklch(0.21 0 0);
+  --paper-4: oklch(0.25 0 0);
+  --ink: oklch(0.98 0 0);
+  --ink-2: oklch(0.82 0 0);
+  --ink-3: oklch(0.60 0 0);
+  --ink-4: oklch(0.42 0 0);
+  --line: oklch(0.26 0 0);
+  --line-2: oklch(0.32 0 0);
+}
+
+/* kill shadows, emphasize rules */
+[data-refinement="mono"] .msg,
+[data-refinement="mono"] .tool,
+[data-refinement="mono"] .appr,
+[data-refinement="mono"] .fcard {
+  box-shadow: none;
+}
+
+/* flat chat — rule-separated messages */
+[data-refinement="mono"] .msg {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+[data-refinement="mono"] .msg-user {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+[data-refinement="mono"] .msg-user-bubble {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+}
+[data-refinement="mono"] .chat-inner { padding-top: 0; }
+
+/* tighter, more uniform type */
+[data-refinement="mono"] {
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+}
+[data-refinement="mono"] .sec h3 {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+[data-refinement="mono"] .msg .by > span:first-child {
+  font-family: var(--sans);
+  font-weight: 600;
+}
+[data-refinement="mono"] .sessions-head .title,
+[data-refinement="mono"] .chat-head .sess-title {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* accent reserved for interactive state only */
+[data-refinement="mono"] .iconbtn:hover,
+[data-refinement="mono"] .btn-sm:hover {
+  background: var(--paper-3);
+  color: var(--ink);
+}
+[data-refinement="mono"] .sessions .sess.active {
+  background: var(--paper-3);
+  border-left: 2px solid var(--ink);
+}
+[data-refinement="mono"] .toggle.on { background: var(--ink); }
+[data-refinement="mono"] .chip.on { background: var(--ink); border-color: var(--ink); }
+[data-refinement="mono"] :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+[data-refinement="mono"] input:focus,
+[data-refinement="mono"] select:focus,
+[data-refinement="mono"] textarea:focus {
+  border-color: var(--accent) !important;
+  outline: 0;
+}
+
+/* canvas file list: grid-like, denser */
+[data-refinement="mono"] .fcard {
+  border-radius: var(--radius);
+  background: var(--paper-2);
+}
+[data-refinement="mono"] .artifact-ref {
+  border-radius: var(--radius);
+}
+
+/* tool calls: mono-quiet */
+[data-refinement="mono"] .tool {
+  background: transparent;
+  border: 1px dashed var(--line);
+}
+[data-refinement="mono"] .tool-head .status.ok { color: var(--ink-2); }
