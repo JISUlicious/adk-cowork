@@ -34,6 +34,7 @@ from cowork_core.tools.base import (
     COWORK_CONTEXT_KEY,
     COWORK_POLICY_MODE_KEY,
     COWORK_PYTHON_EXEC_KEY,
+    COWORK_TOOL_ALLOWLIST_KEY,
 )
 
 # Tools that mutate project state
@@ -165,3 +166,46 @@ def make_permission_callback(
         return None
 
     return _check_permission
+
+
+def make_allowlist_callback(agent_name: str) -> Any:
+    """Return a ``before_tool_callback`` that enforces a per-agent
+    tool allowlist from session state.
+
+    Tier E.E1. The allowlist lives in
+    ``tool_context.state[COWORK_TOOL_ALLOWLIST_KEY]`` as
+    ``dict[str, list[str]]`` (agent name → allowed tool names). An
+    agent absent from the dict runs unrestricted (default behaviour,
+    pre-E1 compatible); an agent with an empty list is effectively
+    silenced because every tool call is blocked.
+
+    The closure captures ``agent_name`` at callback-creation time
+    rather than reaching into ADK's private ``InvocationContext`` for
+    the current agent. We register one callback per sub-agent in
+    ``build_root_agent``; the root agent is unrestricted by design —
+    the feature scopes specialist sub-agents, not the primary
+    interlocutor. A user who wants to block a tool entirely should
+    use the existing policy layer (e.g. ``python_exec = "deny"``).
+    """
+
+    def _check(
+        tool: BaseTool,
+        _args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> dict[str, Any] | None:
+        allowlist = tool_context.state.get(COWORK_TOOL_ALLOWLIST_KEY)
+        if not isinstance(allowlist, dict):
+            return None
+        allowed = allowlist.get(agent_name)
+        if allowed is None:
+            return None
+        if tool.name in allowed:
+            return None
+        return {
+            "error": (
+                f"Tool '{tool.name}' not allowed for agent "
+                f"'{agent_name}' this session."
+            ),
+        }
+
+    return _check

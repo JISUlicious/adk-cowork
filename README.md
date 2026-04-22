@@ -218,16 +218,16 @@ cosmetic variants); `deferred` entries are planned for a later tier.
 | Approval card (banner / queue) | Chat | culled | P1 |
 | Tool-call style (collapsed / expanded / terminal) | Chat | wired | V4 |
 | Composer attach | Chat | wired (ref-path v1) | P4 |
-| Composer auto-route pill | Chat | culled | P1 |
-| Composer @-mention | Chat | stubbed | deferred (Tier E) |
+| Composer auto-route pill | Chat | wired (revived) | E2 |
+| Composer @-mention | Chat | wired | E2 |
 | Compaction separator | Chat | wired | E3 |
 | Settings → Appearance (theme / accent / toolStyle) | Settings | wired | V6 |
 | Settings → Appearance → approval style | Settings | culled | P1 |
 | Settings → Appearance → refinement | Settings | culled | P1 |
 | Settings → Appearance → density / layout | Settings | culled | P4 |
 | Settings → Agents & tools (read-only) | Settings | wired | V6 / P1 |
-| Settings → Agents enable / disable | Settings | stubbed | deferred (Tier E) |
-| Settings → Per-agent tool allowlist | Settings | stubbed | deferred (Tier E) |
+| Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
+| Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |
 | Settings → System (health + compaction) | Settings | wired | V6 / E3 |
 

@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from cowork_core.config import PolicyConfig
-from cowork_core.policy.permissions import make_permission_callback
+from cowork_core.policy.permissions import (
+    make_allowlist_callback,
+    make_permission_callback,
+)
+from cowork_core.tools.base import COWORK_TOOL_ALLOWLIST_KEY
 
 
 def _make_tool(name: str) -> MagicMock:
@@ -337,3 +341,99 @@ class TestSessionPolicyEndpoint:
         # Unknown modes are rejected.
         with pytest.raises(ValueError):
             await runtime.set_session_policy_mode(sid, "cowboy")
+
+
+class TestAllowlistCallback:
+    """``make_allowlist_callback`` produces a per-agent closure used by
+    ``build_root_agent`` to gate sub-agent tool access. The root agent is
+    not wired with this callback — it runs unrestricted by design."""
+
+    def test_no_allowlist_means_unrestricted(self) -> None:
+        cb = make_allowlist_callback("researcher")
+        ctx = _ctx()
+        # Absent key → no restriction; every tool passes.
+        for tool_name in ("fs_read", "python_exec_run", "shell_run"):
+            assert cb(_make_tool(tool_name), {}, ctx) is None
+
+    def test_agent_absent_from_dict_unrestricted(self) -> None:
+        cb = make_allowlist_callback("analyst")
+        ctx = _ctx()
+        # Allowlist exists but analyst is absent → unrestricted.
+        ctx.state[COWORK_TOOL_ALLOWLIST_KEY] = {"writer": ["fs_read"]}
+        assert cb(_make_tool("python_exec_run"), {}, ctx) is None
+
+    def test_allowlist_blocks_unapproved_tools(self) -> None:
+        cb = make_allowlist_callback("researcher")
+        ctx = _ctx()
+        ctx.state[COWORK_TOOL_ALLOWLIST_KEY] = {
+            "researcher": ["fs_read", "http_fetch"],
+        }
+        # Allowed tools pass.
+        assert cb(_make_tool("fs_read"), {}, ctx) is None
+        assert cb(_make_tool("http_fetch"), {}, ctx) is None
+        # Disallowed tool is blocked with a readable error that names
+        # both the tool and the agent so the UI can render it in-place.
+        result = cb(_make_tool("python_exec_run"), {}, ctx)
+        assert result is not None
+        assert "python_exec_run" in result["error"]
+        assert "researcher" in result["error"]
+
+    def test_empty_list_silences_agent(self) -> None:
+        cb = make_allowlist_callback("writer")
+        ctx = _ctx()
+        ctx.state[COWORK_TOOL_ALLOWLIST_KEY] = {"writer": []}
+        # Every tool is blocked — the agent is effectively silenced.
+        for tool_name in ("fs_read", "fs_write", "python_exec_run"):
+            result = cb(_make_tool(tool_name), {}, ctx)
+            assert result is not None
+            assert "writer" in result["error"]
+
+    def test_malformed_allowlist_falls_back_to_unrestricted(self) -> None:
+        """Defensive: if someone writes the wrong type to state (pre-E1
+        stale data, a bad PATCH, etc.), the callback shouldn't crash the
+        whole turn — it should treat the agent as unrestricted."""
+        cb = make_allowlist_callback("reviewer")
+        ctx = _ctx()
+        ctx.state[COWORK_TOOL_ALLOWLIST_KEY] = "not-a-dict"
+        assert cb(_make_tool("fs_read"), {}, ctx) is None
+
+
+@pytest.mark.asyncio
+class TestRuntimeAllowlist:
+    async def test_runtime_round_trip(self, tmp_path: object) -> None:
+        """Runtime setter writes through ADK session state; getter reads
+        back the same structure. Empty dict = no restrictions."""
+        import pathlib
+
+        from cowork_core import CoworkConfig
+        from cowork_core.config import WorkspaceConfig
+        from cowork_core.runner import build_runtime
+
+        assert isinstance(tmp_path, pathlib.Path)
+        cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+        runtime = build_runtime(cfg)
+        _, _, sid = await runtime.open_session(project_name="TestAllowlistProj")
+
+        # Fresh session has no allowlist.
+        assert await runtime.get_session_tool_allowlist(sid) == {}
+
+        # Set, then read back. Lists normalise to new list objects.
+        applied = await runtime.set_session_tool_allowlist(
+            sid, {"researcher": ["fs_read", "http_fetch"]},
+        )
+        assert applied == {"researcher": ["fs_read", "http_fetch"]}
+        assert await runtime.get_session_tool_allowlist(sid) == {
+            "researcher": ["fs_read", "http_fetch"],
+        }
+
+        # Bad payload types are rejected before any write.
+        with pytest.raises(ValueError):
+            await runtime.set_session_tool_allowlist(sid, "not-a-dict")  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            await runtime.set_session_tool_allowlist(
+                sid, {"writer": "not-a-list"},  # type: ignore[dict-item]
+            )
+        with pytest.raises(ValueError):
+            await runtime.set_session_tool_allowlist(
+                sid, {"writer": [1, 2, 3]},  # type: ignore[list-item]
+            )

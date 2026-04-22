@@ -36,9 +36,11 @@ from cowork_core.execenv import LocalDirExecEnv, ManagedExecEnv
 from cowork_core.sessions import SqliteCoworkSessionService
 from cowork_core.skills import SkillRegistry, register_skill_tools
 from cowork_core.tools import (
+    COWORK_AUTO_ROUTE_KEY,
     COWORK_CONTEXT_KEY,
     COWORK_POLICY_MODE_KEY,
     COWORK_PYTHON_EXEC_KEY,
+    COWORK_TOOL_ALLOWLIST_KEY,
     CoworkToolContext,
     ToolRegistry,
 )
@@ -450,6 +452,120 @@ class CoworkRuntime:
         return session.state.get(
             COWORK_PYTHON_EXEC_KEY, self.cfg.policy.python_exec,
         )
+
+    async def set_session_tool_allowlist(
+        self,
+        session_id: str,
+        allowlist: dict[str, list[str]],
+        user_id: str = "local",
+    ) -> dict[str, list[str]]:
+        """Persist a per-agent tool allowlist override for the session.
+
+        Tier E.E1. Structure: ``{agent_name: [tool_name, ...]}``. Agents
+        absent from the dict run unrestricted; an empty list silences an
+        agent (every tool call is blocked). Passing ``{}`` clears all
+        restrictions — same as removing the key entirely, since the
+        allowlist callback falls back to "no restriction" on an absent
+        agent.
+        """
+
+        if not isinstance(allowlist, dict):
+            raise ValueError("tool allowlist must be a dict")
+        cleaned: dict[str, list[str]] = {}
+        for agent_name, tools_for_agent in allowlist.items():
+            if not isinstance(agent_name, str):
+                raise ValueError(
+                    f"allowlist agent name must be str, got {type(agent_name).__name__}",
+                )
+            if not isinstance(tools_for_agent, list) or not all(
+                isinstance(t, str) for t in tools_for_agent
+            ):
+                raise ValueError(
+                    f"allowlist for agent {agent_name!r} must be list[str]",
+                )
+            cleaned[agent_name] = list(tools_for_agent)
+
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+
+        from google.adk.events.event import Event
+        from google.adk.events.event_actions import EventActions
+
+        event = Event(
+            author="cowork-server",
+            invocation_id="",
+            actions=EventActions(state_delta={COWORK_TOOL_ALLOWLIST_KEY: cleaned}),
+        )
+        await self.runner.session_service.append_event(session, event)
+        return cleaned
+
+    async def get_session_tool_allowlist(
+        self,
+        session_id: str,
+        user_id: str = "local",
+    ) -> dict[str, list[str]]:
+        """Return the session's tool allowlist (empty dict when unset)."""
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+        stored = session.state.get(COWORK_TOOL_ALLOWLIST_KEY)
+        if not isinstance(stored, dict):
+            return {}
+        return {
+            str(k): list(v) if isinstance(v, list) else []
+            for k, v in stored.items()
+        }
+
+    async def set_session_auto_route(
+        self,
+        session_id: str,
+        enabled: bool,
+        user_id: str = "local",
+    ) -> bool:
+        """Toggle the `@`-mention routing protocol for the session.
+
+        Tier E.E2. When True (default), the root agent's prompt
+        includes the ``@<agent_name>`` routing directive. When False,
+        the paragraph is omitted and the root decides delegation
+        normally — escape hatch.
+        """
+        if not isinstance(enabled, bool):
+            raise ValueError(f"auto_route must be a bool, got {type(enabled).__name__}")
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+
+        from google.adk.events.event import Event
+        from google.adk.events.event_actions import EventActions
+
+        event = Event(
+            author="cowork-server",
+            invocation_id="",
+            actions=EventActions(state_delta={COWORK_AUTO_ROUTE_KEY: enabled}),
+        )
+        await self.runner.session_service.append_event(session, event)
+        return enabled
+
+    async def get_session_auto_route(
+        self,
+        session_id: str,
+        user_id: str = "local",
+    ) -> bool:
+        """Return the session's auto-route flag (default True)."""
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+        stored = session.state.get(COWORK_AUTO_ROUTE_KEY, True)
+        return stored if isinstance(stored, bool) else True
 
     async def grant_tool_approval(
         self,

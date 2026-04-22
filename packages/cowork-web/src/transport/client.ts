@@ -231,6 +231,66 @@ export class CoworkClient {
     return (await r.json()).policy;
   }
 
+  /** Per-agent tool allowlist (Tier E.E1). Empty dict = no
+   *  restrictions; absent agent = unrestricted; empty list = silenced.
+   *  Root agent is always unrestricted — the allowlist scopes
+   *  specialist sub-agents only. */
+  async getSessionToolAllowlist(
+    sessionId: string,
+  ): Promise<Record<string, string[]>> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/tool_allowlist`,
+      { headers: this.headers() },
+    );
+    if (!r.ok) throw new Error(`getSessionToolAllowlist: ${r.status}`);
+    return (await r.json()).allowlist ?? {};
+  }
+
+  async setSessionToolAllowlist(
+    sessionId: string,
+    allowlist: Record<string, string[]>,
+  ): Promise<Record<string, string[]>> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/tool_allowlist`,
+      {
+        method: "PUT",
+        headers: this.headers(),
+        body: JSON.stringify({ allowlist }),
+      },
+    );
+    if (!r.ok) throw new Error(`setSessionToolAllowlist: ${r.status}`);
+    return (await r.json()).allowlist ?? {};
+  }
+
+  /** `@`-mention auto-route flag (Tier E.E2). When on (default), the
+   *  root agent honors a leading ``@<agent_name>`` in the user's
+   *  message by transferring to that sub-agent. When off, the
+   *  directive is omitted from the root's prompt. */
+  async getSessionAutoRoute(sessionId: string): Promise<boolean> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/auto_route`,
+      { headers: this.headers() },
+    );
+    if (!r.ok) throw new Error(`getSessionAutoRoute: ${r.status}`);
+    return Boolean((await r.json()).enabled);
+  }
+
+  async setSessionAutoRoute(
+    sessionId: string,
+    enabled: boolean,
+  ): Promise<boolean> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/auto_route`,
+      {
+        method: "PUT",
+        headers: this.headers(),
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    if (!r.ok) throw new Error(`setSessionAutoRoute: ${r.status}`);
+    return Boolean((await r.json()).enabled);
+  }
+
   /**
    * Create a new session.
    *

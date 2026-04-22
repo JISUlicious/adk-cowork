@@ -177,6 +177,8 @@ cowork/
 
 Each sub-agent is one file, ≤150 lines, declaring: name, model, instruction, tools, optional sub-agents. Adding a new specialist = copy a file, register in `agents/__init__.py`.
 
+**User-directed routing (@-mentions).** When the user starts a message with `@<agent_name>` (e.g. `@researcher gather sources on X`), the root agent transfers to that sub-agent on the first move rather than answering itself. The directive lives in the root's system prompt (an `AT_MENTION_PROTOCOL` paragraph in `cowork_core.agents.root_agent`) and is gated by the per-session `cowork.auto_route` state flag (default True). Toggling auto-route off — from the composer pill — omits the paragraph and lets the root handle `@`-text as plain input. This rides ADK's native `sub_agents` delegation rather than adding a manual `transfer_to_agent` tool; determinism depends on the model honoring the prompt directive, which manual QA validates.
+
 **Model layer** — a single **OpenAI-compatible adapter** plugged into ADK's model abstraction. Any endpoint that implements OpenAI's `/v1/chat/completions` with tool-calling is supported: OpenAI, OpenRouter, Groq, Together, vLLM, LM Studio, Ollama (`/v1`), LiteLLM proxy, etc. Model choice is config-driven (`cowork.toml`: `base_url`, `api_key`, `model`). No vendor-specific code paths in the core.
 
 Office workers will typically use a cloud endpoint; privacy-sensitive users point `base_url` at `http://localhost:11434/v1` (Ollama) or similar — same binary, same UI, zero code change.
@@ -256,6 +258,8 @@ Only `name` + `description` are injected into the root agent's system prompt (a 
 - **Workspace sandbox**: every file tool is rooted at a `Workspace` dir; path traversal is rejected before the tool runs.
 - **Confirm-gated actions**: any tool marked `requires_confirmation=True` (email send, shell run outside allowlist, destructive file ops) emits a `confirmation_required` event; the surface (web/app) shows a modal; the tool only dispatches after an approval event returns. This is enforced in core, not in surfaces, so the CLI/TUI/app all inherit it.
 - **Notifications**: turn-complete, approval-needed, and error events are pushed onto a per-user `NotificationStore` (ephemeral, in-process) that the UI polls via `/v1/notifications`. Like approvals, the store lives outside ADK session state to avoid the OCC race on `session.last_update_time`; see `ARCHITECTURE.md §5`.
+- **Per-agent tool allowlist**: each sub-agent (researcher / writer / analyst / reviewer) can be restricted to a subset of the tool catalog for the session, via ADK state key `cowork.tool_allowlist` (`dict[str, list[str]]` — agent name → allowed tool names). Absent agent = unrestricted (default); empty list = silenced. The root agent is unrestricted by design. Enforced by a per-agent `before_tool_callback` closure created at agent-build time in `cowork_core.policy.permissions.make_allowlist_callback`.
+- **@-mention auto-route**: ADK state key `cowork.auto_route` (bool, default True) gates whether the root agent's prompt includes the `@<agent_name>` routing protocol. See §2.4.
 
 ### 2.7 Transport protocol
 

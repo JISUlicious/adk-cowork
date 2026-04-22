@@ -39,10 +39,17 @@ interface Attachment {
   displayName: string;
 }
 
+/** Sub-agents the composer can route to via ``@mention``. Keep in
+ *  sync with ``cowork_core.agents.root_agent`` sub_agents list. Typos
+ *  still send — the root agent calls them out in reply rather than
+ *  silently failing, matching the AT_MENTION_PROTOCOL directive. */
+const AT_MENTION_AGENTS = ["researcher", "writer", "analyst", "reviewer"] as const;
+
 interface Props {
   messages: ChatMessage[];
   sending: boolean;
   agents: string[];
+  client: CoworkClient;
   sessionId?: string | null;
   sessionTitle?: string;
   /** Tool-call ids the user has already approved/denied in this
@@ -73,6 +80,7 @@ export function Chat({
   messages,
   sending,
   agents,
+  client,
   sessionId,
   sessionTitle,
   decidedToolIds,
@@ -87,9 +95,98 @@ export function Chat({
   const [attached, setAttached] = useState<Attachment[]>([]);
   const [attachBusy, setAttachBusy] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
+  // Tier E.E2 — @-mention autocomplete + auto-route toggle.
+  const [atMenuOpen, setAtMenuOpen] = useState(false);
+  const [atMenuQuery, setAtMenuQuery] = useState("");
+  const [atMenuIdx, setAtMenuIdx] = useState(0);
+  const [autoRoute, setAutoRoute] = useState(true);
   const bodyRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch the session's auto-route flag whenever the session switches.
+  // Missing session falls back to the server default (True) without an
+  // HTTP round-trip — the composer chip is meant to be cheap to render.
+  useEffect(() => {
+    if (!sessionId) {
+      setAutoRoute(true);
+      return;
+    }
+    client
+      .getSessionAutoRoute(sessionId)
+      .then(setAutoRoute)
+      .catch(() => setAutoRoute(true));
+  }, [client, sessionId]);
+
+  const toggleAutoRoute = async () => {
+    if (!sessionId) return;
+    const next = !autoRoute;
+    setAutoRoute(next); // optimistic
+    try {
+      const confirmed = await client.setSessionAutoRoute(sessionId, next);
+      setAutoRoute(confirmed);
+    } catch {
+      setAutoRoute(!next);
+    }
+  };
+
+  /** Detect an active ``@<token>`` at the textarea cursor. Returns
+   *  ``null`` when the caret isn't on an @-mention, otherwise the
+   *  matched query (without the leading ``@``) and the start index of
+   *  the ``@`` so we can splice cleanly on pick. */
+  const detectAtMention = (
+    value: string,
+    cursor: number,
+  ): { query: string; start: number } | null => {
+    let i = cursor;
+    while (i > 0 && /[A-Za-z0-9_-]/.test(value.charAt(i - 1))) i--;
+    if (i === 0 || value.charAt(i - 1) !== "@") return null;
+    // ``@`` must be at start-of-message or follow whitespace — otherwise
+    // the user is probably mid-word / writing an email.
+    if (i - 1 > 0 && !/\s/.test(value.charAt(i - 2))) return null;
+    return { query: value.slice(i, cursor).toLowerCase(), start: i - 1 };
+  };
+
+  const atMatches = AT_MENTION_AGENTS.filter((name) =>
+    name.toLowerCase().startsWith(atMenuQuery),
+  );
+
+  const refreshAtMenu = (value: string, cursor: number | null | undefined) => {
+    if (cursor == null) {
+      setAtMenuOpen(false);
+      return;
+    }
+    const mention = detectAtMention(value, cursor);
+    if (!mention) {
+      setAtMenuOpen(false);
+      return;
+    }
+    setAtMenuQuery(mention.query);
+    setAtMenuOpen(true);
+    setAtMenuIdx(0);
+  };
+
+  const applyAtMention = (agentName: string) => {
+    const el = taRef.current;
+    if (!el) return;
+    const cursor = el.selectionStart ?? input.length;
+    const mention = detectAtMention(input, cursor);
+    if (!mention) {
+      setAtMenuOpen(false);
+      return;
+    }
+    const before = input.slice(0, mention.start);
+    const after = input.slice(cursor);
+    const inserted = `@${agentName} `;
+    const next = before + inserted + after;
+    setInput(next);
+    setAtMenuOpen(false);
+    const nextCursor = before.length + inserted.length;
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
 
   useEffect(() => {
     bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight, behavior: "smooth" });
@@ -187,6 +284,28 @@ export function Chat({
   };
 
   const onKey = (e: React.KeyboardEvent) => {
+    if (atMenuOpen && atMatches.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAtMenuIdx((i) => (i + 1) % atMatches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAtMenuIdx((i) => (i - 1 + atMatches.length) % atMatches.length);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !(e.metaKey || e.ctrlKey))) {
+        e.preventDefault();
+        applyAtMention(atMatches[atMenuIdx]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAtMenuOpen(false);
+        return;
+      }
+    }
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       submit();
@@ -282,19 +401,92 @@ export function Chat({
               ))}
             </div>
           )}
-          <textarea
-            ref={taRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKey}
-            placeholder={
-              agents.length
-                ? `Reply to ${agents.map(prettyAgent).join(", ")}…  Use @ to target one.`
-                : "Send a message to get started…"
-            }
-            rows={2}
-            disabled={sending}
-          />
+          <div style={{ position: "relative" }}>
+            <textarea
+              ref={taRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                refreshAtMenu(e.target.value, e.target.selectionStart);
+              }}
+              onKeyUp={(e) => {
+                // Cursor can move without content changing (arrow keys,
+                // Home/End, mouse click). Recompute @-mention state so
+                // the menu tracks the caret.
+                const el = e.target as HTMLTextAreaElement;
+                refreshAtMenu(el.value, el.selectionStart);
+              }}
+              onClick={(e) => {
+                const el = e.target as HTMLTextAreaElement;
+                refreshAtMenu(el.value, el.selectionStart);
+              }}
+              onBlur={() => {
+                // Blur fires before mousedown on the menu buttons — delay
+                // the close so a click still lands. onMouseDown on the
+                // menu preventDefaults to keep the textarea focused, so
+                // most users never hit this path, but it's the fallback.
+                window.setTimeout(() => setAtMenuOpen(false), 120);
+              }}
+              onKeyDown={onKey}
+              placeholder={
+                agents.length
+                  ? `Reply to ${agents.map(prettyAgent).join(", ")}…  Use @ to target one.`
+                  : "Send a message to get started…"
+              }
+              rows={2}
+              disabled={sending}
+            />
+            {atMenuOpen && atMatches.length > 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: "calc(100% + 4px)",
+                  left: 10,
+                  minWidth: 180,
+                  background: "var(--paper)",
+                  border: "1px solid var(--line)",
+                  borderRadius: "var(--radius-md)",
+                  boxShadow: "0 8px 22px rgba(0,0,0,0.15)",
+                  zIndex: 20,
+                  overflow: "hidden",
+                }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                {atMatches.map((name, i) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => applyAtMention(name)}
+                    onMouseEnter={() => setAtMenuIdx(i)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      width: "100%",
+                      padding: "6px 10px",
+                      background:
+                        i === atMenuIdx ? "var(--paper-2)" : "transparent",
+                      textAlign: "left",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: "var(--mono)",
+                        fontSize: 11,
+                        color: "var(--ink-3)",
+                      }}
+                    >
+                      @
+                    </span>
+                    <span style={{ fontSize: "var(--fs-sm)", color: "var(--ink)" }}>
+                      {name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="composer-row">
             <input
               ref={fileInputRef}
@@ -311,6 +503,31 @@ export function Chat({
               title={attach ? (attachBusy ? "Uploading…" : "Attach files") : "Select a project or folder first"}
             >
               <Icon name="more" size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void toggleAutoRoute()}
+              disabled={!sessionId}
+              title={
+                sessionId
+                  ? autoRoute
+                    ? "Auto-route @-mentions (click to disable)"
+                    : "Auto-route disabled — @-mentions go to the root"
+                  : "Open a session to toggle @-mention routing"
+              }
+              style={{
+                padding: "2px 8px",
+                borderRadius: 12,
+                fontFamily: "var(--mono)",
+                fontSize: 11,
+                border: "1px solid var(--line)",
+                background: autoRoute ? "var(--accent-soft)" : "var(--paper-3)",
+                color: autoRoute ? "var(--accent-ink)" : "var(--ink-3)",
+                opacity: sessionId ? 1 : 0.5,
+                cursor: sessionId ? "pointer" : "not-allowed",
+              }}
+            >
+              @-route {autoRoute ? "on" : "off"}
             </button>
             <button
               className="send"

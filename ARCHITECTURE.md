@@ -269,3 +269,80 @@ Selection handlers live in `App.tsx`:
   open-file event.
 - **Cross-session message** → resume + retry the scroll until the
   row lands (capped at 20 attempts / ~2 s).
+
+## 10. User-directed agent routing
+
+### Per-agent tool allowlist (Tier E.E1)
+
+Each sub-agent — researcher, writer, analyst, reviewer — can be
+restricted to a subset of the tool catalog for the session. Data
+lives in ADK state at `cowork.tool_allowlist`
+(`dict[str, list[str]]` — agent name → allowed tool names); absent
+agent = unrestricted, empty list = silenced, empty dict = no
+restrictions anywhere.
+
+Enforcement happens in a **per-agent closure**, not in the shared
+permission callback. `make_allowlist_callback(agent_name)` in
+`policy/permissions.py` returns a `before_tool_callback` that
+captures `agent_name` at build time. `build_root_agent` attaches
+the matching closure to each sub-agent's callback list as the
+*first* gate, ahead of the existing permission callback. Closure
+over the agent name avoids reaching into ADK's private
+`InvocationContext.agent` attribute — the public `ToolContext`
+doesn't expose "which agent am I guarding", and coupling to a
+private attribute would be fragile across ADK upgrades.
+
+The **root agent is unrestricted by design.** The allowlist scopes
+specialist sub-agents; users who need to block a capability
+everywhere should use the existing policy layer
+(`python_exec = "deny"`, `email_send = "deny"`). Settings surfaces
+this boundary in the Agents pane copy.
+
+Why state-backed rather than a callback with captured state: the
+allowlist needs to change *during* a session without rebuilding
+the agent (which would cost an interpreter-level restart of the
+runner). State reads inside the callback are cheap and ADK's
+`session_service.append_event` handles the write OCC-safely
+(called from the HTTP PUT handler when no runner is active for
+the session).
+
+### `@`-mentions and auto-route (Tier E.E2)
+
+User types `@researcher gather sources on X`; researcher (not root)
+responds. The mechanism is **prompt-level**, not a manual routing
+tool: `AT_MENTION_PROTOCOL` in `cowork_core/agents/root_agent.py`
+is a paragraph inserted into the root's dynamic instruction that
+tells it to transfer on a leading `@<agent_name>`. ADK's existing
+`sub_agents=[...]` delegation handles the actual hand-off — the
+root already has the machinery; the protocol just tells it when
+to use it.
+
+Two reasons for going prompt-level over a bespoke
+`transfer_to_agent` tool or a client-side parse-and-redispatch:
+
+1. **No fight with ADK.** The runner is built around the root
+   agent; replacing it per-turn (path B in the plan) either
+   requires a per-agent Runner or a Runner override, both fragile
+   across ADK versions. The prompt directive threads the needle
+   without touching Runner at all.
+2. **Determinism is earnable later.** If QA shows the model
+   ignoring the directive, the targeted hardening is server-side
+   message rewriting (strip `@name` from the user message, then
+   `session_service.append_event` the rewritten turn) — not a
+   framework-level restructure. Upgrading to that is cheap; living
+   with a framework restructure is not.
+
+The `cowork.auto_route` state key (bool, default True) gates the
+paragraph. A per-session composer chip toggles it via the same
+PUT/GET route pattern as `python_exec` and `tool_allowlist`; when
+off, the directive is omitted and the root handles `@`-text as
+plain input. This is the escape hatch — ship the default on, flip
+off per session if the routing misbehaves, no code change needed.
+
+Client support: the composer shows an `@`-triggered autocomplete
+popover (keyboard: ↑/↓ navigate, Enter/Tab pick, Escape dismiss)
+listing the four sub-agents. The autocomplete is purely
+client-side; the typed `@name` arrives at the server as part of
+the user's message body and the root reads it from there. No
+new routes are needed for the autocomplete itself — only the
+auto-route toggle has a server-side representation.

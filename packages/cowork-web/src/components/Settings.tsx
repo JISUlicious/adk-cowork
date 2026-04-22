@@ -120,7 +120,11 @@ export function Settings({ client, sessionId, userId, surface, onClose }: Props)
             {tab === "workspace" && <SecWorkspace />}
             {tab === "agents" && (
               <>
-                <SecAgents />
+                <SecAgents
+                  client={client}
+                  sessionId={sessionId}
+                  surface={surface}
+                />
                 <SecTools client={client} surface={surface} />
               </>
             )}
@@ -195,52 +199,263 @@ const AGENT_ROSTER = [
   { id: "reviewer", name: "Kit", role: "review", about: "edits, sanity-checks, runs commands" },
 ];
 
-function SecAgents() {
+function SecAgents({
+  client,
+  sessionId,
+  surface,
+}: {
+  client: CoworkClient;
+  sessionId: string | null;
+  surface?: "managed" | "local";
+}) {
+  const [allowlist, setAllowlist] = useState<Record<string, string[]>>({});
+  const [tools, setTools] = useState<string[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    client
+      .health()
+      .then((h) =>
+        setTools(
+          (h.tools ?? []).filter(
+            (t) => !(surface === "local" && LOCAL_MODE_HIDDEN_TOOLS.has(t)),
+          ),
+        ),
+      )
+      .catch(() => {});
+  }, [client, surface]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setAllowlist({});
+      return;
+    }
+    client
+      .getSessionToolAllowlist(sessionId)
+      .then(setAllowlist)
+      .catch(() => setAllowlist({}));
+  }, [client, sessionId]);
+
+  const toggleOpen = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const isRestricted = (agentId: string) =>
+    Object.prototype.hasOwnProperty.call(allowlist, agentId);
+
+  const effectiveTools = (agentId: string): Set<string> => {
+    if (!isRestricted(agentId)) return new Set(tools);
+    return new Set(allowlist[agentId] ?? []);
+  };
+
+  const persist = async (next: Record<string, string[]>) => {
+    if (!sessionId) return;
+    const prev = allowlist;
+    setAllowlist(next);
+    try {
+      const confirmed = await client.setSessionToolAllowlist(sessionId, next);
+      setAllowlist(confirmed);
+    } catch {
+      setAllowlist(prev);
+    }
+  };
+
+  const setAgentAllowlist = (agentId: string, nextTools: string[] | null) => {
+    const next: Record<string, string[]> = { ...allowlist };
+    if (nextTools === null) delete next[agentId];
+    else next[agentId] = nextTools;
+    void persist(next);
+  };
+
+  const toggleTool = (agentId: string, tool: string) => {
+    const current = effectiveTools(agentId);
+    const next = new Set(current);
+    if (next.has(tool)) next.delete(tool);
+    else next.add(tool);
+    // Preserve input order (matches the catalog) for stable diffs.
+    setAgentAllowlist(agentId, tools.filter((t) => next.has(t)));
+  };
+
   return (
     <div className="sec">
       <h3>Agent roster</h3>
       <div className="desc">
-        Cowork ships four specialists. Per-agent enable / disable lands in a
-        future milestone (Tier E) — today every agent is on, and tools are
-        gated by policy + approvals instead.
+        Cowork ships four specialists. Expand an agent to restrict its tool
+        access for this session. The root agent is unrestricted by design —
+        if you need to block a tool everywhere, use the policy knobs in
+        Approvals instead.
       </div>
       {AGENT_ROSTER.map((a) => {
         const s = agentStyle(a.id);
+        const restricted = isRestricted(a.id);
+        const allowed = effectiveTools(a.id);
+        const isOpen = expanded.has(a.id);
+        const summary = restricted
+          ? `${allowed.size} of ${tools.length} tools`
+          : `all ${tools.length} tools`;
         return (
-          <Field
+          <div
             key={a.id}
-            label={
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span
+            style={{
+              marginBottom: 10,
+              border: "1px solid var(--line)",
+              borderRadius: "var(--radius-md)",
+              overflow: "hidden",
+              background: "var(--paper)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => toggleOpen(a.id)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                width: "100%",
+                padding: "10px 12px",
+                background: "transparent",
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+            >
+              <span
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  background: s.color,
+                  color: "white",
+                  display: "grid",
+                  placeItems: "center",
+                  fontFamily: "var(--serif)",
+                  fontSize: 14,
+                  flexShrink: 0,
+                }}
+              >
+                {s.letter}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
                   style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: "50%",
-                    background: s.color,
-                    color: "white",
-                    display: "grid",
-                    placeItems: "center",
                     fontFamily: "var(--serif)",
-                    fontSize: 14,
+                    fontSize: "var(--fs-md)",
+                    color: "var(--ink)",
                   }}
                 >
-                  {s.letter}
-                </span>
-                <div>
-                  <div style={{ fontFamily: "var(--serif)", fontSize: "var(--fs-md)", color: "var(--ink)" }}>
-                    {a.name}
-                  </div>
-                  <div style={{ fontSize: "var(--fs-xs)", color: "var(--ink-4)" }}>
-                    {a.role} · {a.about}
-                  </div>
+                  {a.name}
+                </div>
+                <div style={{ fontSize: "var(--fs-xs)", color: "var(--ink-4)" }}>
+                  {a.role} · {a.about}
                 </div>
               </div>
-            }
-          >
-            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>
-              all tools
-            </span>
-          </Field>
+              <span
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 11,
+                  color: restricted ? "var(--warn)" : "var(--ink-4)",
+                  flexShrink: 0,
+                }}
+              >
+                {summary}
+              </span>
+              <Icon name={isOpen ? "chevD" : "chevR"} size={11} />
+            </button>
+            {isOpen && (
+              <div
+                style={{
+                  padding: "10px 12px",
+                  borderTop: "1px solid var(--line)",
+                  background: "var(--paper-2)",
+                }}
+              >
+                {!sessionId ? (
+                  <div
+                    style={{
+                      fontSize: "var(--fs-xs)",
+                      color: "var(--ink-3)",
+                      fontFamily: "var(--serif)",
+                    }}
+                  >
+                    Open a session to configure tool access.
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 12,
+                        marginBottom: 8,
+                        fontSize: "var(--fs-xs)",
+                        fontFamily: "var(--mono)",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setAgentAllowlist(a.id, null)}
+                        style={{
+                          color: restricted ? "var(--accent)" : "var(--ink-4)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        allow all
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAgentAllowlist(a.id, [])}
+                        style={{
+                          color: "var(--danger)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        block all
+                      </button>
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(2, 1fr)",
+                        gap: 4,
+                      }}
+                    >
+                      {tools.map((t) => (
+                        <label
+                          key={t}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            fontFamily: "var(--mono)",
+                            fontSize: 11,
+                            color: "var(--ink-2)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allowed.has(t)}
+                            onChange={() => toggleTool(a.id, t)}
+                          />
+                          <span
+                            style={{
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {t}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         );
       })}
     </div>
@@ -286,8 +501,8 @@ function SecTools({
       <h3>Tools & MCP servers</h3>
       <div className="desc">
         Tools registered with the running Cowork server. Per-agent
-        allow-listing comes in Tier E; today every agent can call anything
-        on this list.
+        access is configured in the Agent roster above; the monogram
+        stack on each row is purely decorative here.
       </div>
       {visibleTools.map((t) => (
         <Field

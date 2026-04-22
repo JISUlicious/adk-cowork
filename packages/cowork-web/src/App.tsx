@@ -444,6 +444,7 @@ function App({ baseUrl, token }: AppProps = {}) {
             messages={messages}
             sending={sending}
             agents={agents}
+            client={client}
             sessionId={sessionId}
             decidedToolIds={decidedToolIds}
             onMarkToolDecided={markToolDecided}

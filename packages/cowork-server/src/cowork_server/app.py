@@ -177,6 +177,95 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"policy": applied}
 
+    @app.get("/v1/sessions/{session_id}/policy/tool_allowlist")
+    async def get_session_tool_allowlist_policy(
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Return the per-agent tool allowlist for the session.
+
+        Tier E.E1. Empty dict = no restrictions (default). See
+        ``cowork_core.policy.permissions.make_allowlist_callback`` for
+        the enforcement model. The root agent is unrestricted by design.
+        """
+        try:
+            allowlist = await runtime.get_session_tool_allowlist(
+                session_id=session_id, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"allowlist": allowlist}
+
+    @app.put("/v1/sessions/{session_id}/policy/tool_allowlist")
+    async def set_session_tool_allowlist_policy(
+        session_id: str,
+        body: dict[str, Any],
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Replace the per-agent tool allowlist for the session.
+
+        Body: ``{"allowlist": {"researcher": ["fs_read", ...], ...}}``.
+        Agents absent from the dict run unrestricted; an empty list for
+        an agent silences it (every tool call is blocked). Send ``{}``
+        to clear all restrictions.
+        """
+        raw = body.get("allowlist")
+        if raw is None:
+            raise HTTPException(status_code=400, detail="'allowlist' is required")
+        try:
+            applied = await runtime.set_session_tool_allowlist(
+                session_id=session_id, allowlist=raw, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if message.startswith("no session"):
+                raise HTTPException(status_code=404, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {"allowlist": applied}
+
+    @app.get("/v1/sessions/{session_id}/policy/auto_route")
+    async def get_session_auto_route_policy(
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, bool]:
+        """Return the session's ``@``-mention auto-route flag
+        (default True). Tier E.E2."""
+        try:
+            enabled = await runtime.get_session_auto_route(
+                session_id=session_id, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"enabled": enabled}
+
+    @app.put("/v1/sessions/{session_id}/policy/auto_route")
+    async def set_session_auto_route_policy(
+        session_id: str,
+        body: dict[str, Any],
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, bool]:
+        """Toggle the session's ``@``-mention auto-route flag.
+
+        Body: ``{"enabled": bool}``. When off, the root agent's prompt
+        omits the routing directive and a leading ``@name`` is treated
+        as plain text.
+        """
+        raw = body.get("enabled")
+        if not isinstance(raw, bool):
+            raise HTTPException(
+                status_code=400, detail="'enabled' must be a bool",
+            )
+        try:
+            applied = await runtime.set_session_auto_route(
+                session_id=session_id, enabled=raw, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if message.startswith("no session"):
+                raise HTTPException(status_code=404, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {"enabled": applied}
+
     # ── Per-session tool approvals ─────────────────────────────────────
 
     @app.get("/v1/sessions/{session_id}/approvals")

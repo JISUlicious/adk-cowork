@@ -35,6 +35,20 @@ COWORK_PYTHON_EXEC_KEY = "cowork.python_exec"
 # increments. See ``policy/permissions.py``.
 COWORK_TOOL_APPROVALS_KEY = "cowork.tool_approvals"
 
+# Per-session ``dict[str, list[str]]`` — agent name → allowed tool names.
+# An agent absent from the dict runs unrestricted (default); an empty
+# list effectively silences the agent. Enforced by
+# ``make_allowlist_callback`` in ``policy/permissions.py`` — one closure
+# per sub-agent, attached at agent-build time in ``root_agent.py``.
+COWORK_TOOL_ALLOWLIST_KEY = "cowork.tool_allowlist"
+
+# Per-session bool — when True (default), the root agent's instruction
+# includes the ``@``-mention routing protocol. When False, the
+# paragraph is omitted and ``@researcher ...`` goes to the root for a
+# normal delegation decision (escape hatch if the protocol misbehaves).
+# Tier E.E2.
+COWORK_AUTO_ROUTE_KEY = "cowork.auto_route"
+
 
 @dataclass(frozen=True)
 class CoworkToolContext:

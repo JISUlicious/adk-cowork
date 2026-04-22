@@ -26,8 +26,15 @@ from cowork_core.callbacks import make_model_callbacks
 from cowork_core.config import CoworkConfig, McpServerConfig
 from cowork_core.model.openai_compat import build_model
 from cowork_core.policy.hooks import make_audit_callbacks
-from cowork_core.policy.permissions import make_permission_callback
-from cowork_core.tools.base import COWORK_CONTEXT_KEY, COWORK_POLICY_MODE_KEY
+from cowork_core.policy.permissions import (
+    make_allowlist_callback,
+    make_permission_callback,
+)
+from cowork_core.tools.base import (
+    COWORK_AUTO_ROUTE_KEY,
+    COWORK_CONTEXT_KEY,
+    COWORK_POLICY_MODE_KEY,
+)
 
 ROOT_HEADER = """\
 You are Cowork, an office-work copilot.
@@ -65,6 +72,23 @@ You have four specialist sub-agents. Delegate to them for complex tasks:
 For simple requests (read a file, quick answer), handle them yourself.
 For multi-step workflows (research → draft → review), delegate to the
 appropriate sub-agents in sequence.
+"""
+
+# Tier E.E2. Included in the root instruction when
+# ``cowork.auto_route`` is ``True`` (default). The directive steers
+# ADK's native ``sub_agents`` delegation — we don't add a manual
+# ``transfer_to_agent`` tool; the root already has the hand-off
+# mechanism and just needs to be told when to use it.
+AT_MENTION_PROTOCOL = """\
+User-directed routing:
+If the user's message begins with ``@<agent_name>`` (e.g. ``@researcher``,
+``@writer``, ``@analyst``, ``@reviewer``), transfer to that sub-agent on the
+first move. Do not answer yourself first. The mentioned sub-agent should
+strip the ``@<agent_name>`` prefix from the message and respond to the
+actual request.
+
+If the name doesn't match a known sub-agent, acknowledge the typo and
+handle the request yourself.
 """
 
 PLAN_MODE_ADDENDUM = """\
@@ -113,13 +137,22 @@ def _compose_instruction(
     working_context: str,
     skills_snippet: str,
     policy_mode: str,
+    auto_route: bool = True,
 ) -> str:
     """Assemble the root system prompt for a single turn.
 
     Header → env-specific working-context paragraph → tool-use guidance →
-    sub-agent guidance → optional skill catalog → optional plan-mode addendum.
+    sub-agent guidance → optional ``@``-mention protocol → optional skill
+    catalog → optional plan-mode addendum.
+
+    ``auto_route`` gates the ``@``-mention paragraph. When off, the
+    root sees an unannotated user message and decides delegation
+    normally — escape hatch for sessions where the routing directive
+    misbehaves.
     """
     parts = [ROOT_HEADER.rstrip(), working_context.rstrip(), ROOT_TAIL.rstrip()]
+    if auto_route:
+        parts.append(AT_MENTION_PROTOCOL.rstrip())
     if skills_snippet:
         parts.append(skills_snippet.rstrip())
     prompt = "\n\n".join(parts) + "\n"
@@ -170,7 +203,14 @@ def build_root_agent(
     def _dynamic_instruction(ctx: ReadonlyContext) -> str:
         working_context = _env_description(ctx)
         mode = ctx.state.get(COWORK_POLICY_MODE_KEY, cfg.policy.mode)
-        return _compose_instruction(working_context, skills_snippet, mode)
+        # Auto-route defaults to True; any non-bool stored value is
+        # ignored so a malformed state write can't silently turn the
+        # feature off for the session.
+        raw_auto_route = ctx.state.get(COWORK_AUTO_ROUTE_KEY, True)
+        auto_route = raw_auto_route if isinstance(raw_auto_route, bool) else True
+        return _compose_instruction(
+            working_context, skills_snippet, mode, auto_route=auto_route,
+        )
 
     model = build_model(cfg.model)
     adk_tools: list[Any] = list(tools or [])
@@ -187,16 +227,25 @@ def build_root_agent(
     permission_cb = make_permission_callback(cfg.policy)
     audit_before, audit_after = make_audit_callbacks()
     before_model_cb, after_model_cb = make_model_callbacks()
-    before_tool_cbs = [permission_cb, audit_before]
+    # Root is unrestricted by the allowlist by design — the feature
+    # scopes specialist sub-agents, not the primary interlocutor. Each
+    # sub-agent gets its own allowlist closure so the callback can
+    # know "which agent am I guarding" without reaching into ADK's
+    # private ``InvocationContext``.
+    root_before_tool_cbs = [permission_cb, audit_before]
     after_tool_cbs = [audit_after]
 
-    # Sub-agents share the same model, tools, and callbacks.
+    def _sub_before_tool(name: str) -> list[Any]:
+        return [make_allowlist_callback(name), permission_cb, audit_before]
+
+    # Sub-agents share the same model and tools; callbacks add a
+    # per-agent allowlist check as the first gate.
     researcher = LlmAgent(
         name="researcher",
         model=model,
         instruction=_sub_agent_instruction(RESEARCHER_INSTRUCTION),
         tools=adk_tools,
-        before_tool_callback=before_tool_cbs,
+        before_tool_callback=_sub_before_tool("researcher"),
         after_tool_callback=after_tool_cbs,
         before_model_callback=before_model_cb,
         after_model_callback=after_model_cb,
@@ -206,7 +255,7 @@ def build_root_agent(
         model=model,
         instruction=_sub_agent_instruction(WRITER_INSTRUCTION),
         tools=adk_tools,
-        before_tool_callback=before_tool_cbs,
+        before_tool_callback=_sub_before_tool("writer"),
         after_tool_callback=after_tool_cbs,
         before_model_callback=before_model_cb,
         after_model_callback=after_model_cb,
@@ -216,7 +265,7 @@ def build_root_agent(
         model=model,
         instruction=_sub_agent_instruction(ANALYST_INSTRUCTION),
         tools=adk_tools,
-        before_tool_callback=before_tool_cbs,
+        before_tool_callback=_sub_before_tool("analyst"),
         after_tool_callback=after_tool_cbs,
         before_model_callback=before_model_cb,
         after_model_callback=after_model_cb,
@@ -226,7 +275,7 @@ def build_root_agent(
         model=model,
         instruction=_sub_agent_instruction(REVIEWER_INSTRUCTION),
         tools=adk_tools,
-        before_tool_callback=before_tool_cbs,
+        before_tool_callback=_sub_before_tool("reviewer"),
         after_tool_callback=after_tool_cbs,
         before_model_callback=before_model_cb,
         after_model_callback=after_model_cb,
@@ -238,7 +287,7 @@ def build_root_agent(
         instruction=_dynamic_instruction,
         tools=adk_tools,
         sub_agents=[researcher, writer, analyst, reviewer],
-        before_tool_callback=before_tool_cbs,
+        before_tool_callback=root_before_tool_cbs,
         after_tool_callback=after_tool_cbs,
         before_model_callback=before_model_cb,
         after_model_callback=after_model_cb,
