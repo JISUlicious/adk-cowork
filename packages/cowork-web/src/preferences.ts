@@ -1,38 +1,36 @@
 /**
  * Per-user appearance preferences (client-side only).
  *
- * The Settings → Appearance group binds to this store; components
- * read ``toolStyle`` to pick the tool-call rendering variant. Theme
- * is delegated to ``theme.ts`` which already handles ``system`` with
+ * The Settings → Appearance group binds to this store. Theme is
+ * delegated to ``theme.ts`` which already handles ``system`` with
  * media-query tracking.
  *
  * Storage is plain ``localStorage`` under ``cowork_prefs`` — the same
  * shape the design prototype used (``cowork_tweaks``), renamed to
  * reflect that it's shipped user-facing config, not a hidden dev knob.
  *
- * Knobs dropped in Phase F cleanup because they were cosmetic with no
- * behavioural difference or because only one value was ever wired:
+ * Knobs dropped because they were cosmetic with no behavioural
+ * difference or because only one value was ever wired:
  * - ``approvalStyle`` (banner / queue variants) — inline is permanent.
  * - ``refinement`` — only ``editorial`` was ever wired.
  * - ``density`` / ``layout`` — rarely changed, noisy Settings rows;
  *   kept as static defaults on ``<html>`` so the CSS still hits.
+ * - ``toolStyle`` (collapsed / expanded / terminal) — every tool
+ *   call now renders collapsible-by-default with terminal-framed
+ *   body for shellish tools; the per-style choice was noise.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import type { ThemeMode } from "./theme";
 
-export type ToolStyle = "collapsed" | "expanded" | "terminal";
-
 export interface Preferences {
   theme: ThemeMode;
   accentHue: number;
-  toolStyle: ToolStyle;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: "system",
   accentHue: 42,
-  toolStyle: "collapsed",
 };
 
 const STORAGE_KEY = "cowork_prefs";

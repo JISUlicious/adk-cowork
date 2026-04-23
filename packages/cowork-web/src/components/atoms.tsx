@@ -119,24 +119,21 @@ export function agentStyle(name: string | undefined | null) {
   return AGENT_STYLE[name.toLowerCase()] ?? NEUTRAL;
 }
 
-/**
- * Circular monogram for a single agent. Used in chat messages, session
- * rows, and the agent roster in Settings.
- */
-export function Mono({
+/** Circular monogram for a single agent — currently used only by
+ *  ``AgentStack`` below. Kept in-file (not exported) since no other
+ *  component reaches for it directly. */
+function Mono({
   agent,
   size = 22,
-  title,
 }: {
   agent: string | undefined | null;
   size?: number;
-  title?: string;
 }) {
   const s = agentStyle(agent);
   return (
     <span
       className="av"
-      title={title ?? agent ?? ""}
+      title={agent ?? ""}
       style={{
         width: size,
         height: size,

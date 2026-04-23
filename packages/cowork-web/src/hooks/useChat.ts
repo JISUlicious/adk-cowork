@@ -40,31 +40,6 @@ export interface ChatMessage {
 const SYNTHETIC_AUTHORS = new Set(["cowork-server", "cowork-client"]);
 
 const DECIDED_STORAGE_PREFIX = "cowork:decided:";
-const TRUSTED_STORAGE_PREFIX = "cowork:trusted:";
-
-function loadTrustedFromStorage(sid: string): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = window.localStorage.getItem(TRUSTED_STORAGE_PREFIX + sid);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw);
-    return new Set(Array.isArray(arr) ? arr : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function persistTrustedToStorage(sid: string, names: Set<string>): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      TRUSTED_STORAGE_PREFIX + sid,
-      JSON.stringify(Array.from(names)),
-    );
-  } catch {
-    /* ignore */
-  }
-}
 
 function loadDecidedFromStorage(sid: string): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -139,20 +114,6 @@ export function useChat(client: CoworkClient) {
     setDecidedToolIds(new Set(decidedToolIdsRef.current));
     const sid = sessionRef.current;
     if (sid) persistDecidedToStorage(sid, decidedToolIdsRef.current);
-  }, []);
-  // Tool names the user has granted "trust for this session" — approved
-  // once, auto-approved on subsequent calls with a different id. Stored
-  // in localStorage so the allow-list survives app relaunches, and the
-  // corresponding server-side approval is re-granted the first time a
-  // ``confirmation_required`` arrives after a restart.
-  const [trustedToolNames, setTrustedToolNames] = useState<Set<string>>(new Set());
-  const trustedToolNamesRef = useRef<Set<string>>(new Set());
-  const markToolTrusted = useCallback((toolName: string) => {
-    if (trustedToolNamesRef.current.has(toolName)) return;
-    trustedToolNamesRef.current.add(toolName);
-    setTrustedToolNames(new Set(trustedToolNamesRef.current));
-    const sid = sessionRef.current;
-    if (sid) persistTrustedToStorage(sid, trustedToolNamesRef.current);
   }, []);
   // Background SSE subscriptions — keyed by session id. When the user
   // switches away from a session whose turn is still in flight, we
@@ -552,11 +513,6 @@ export function useChat(client: CoworkClient) {
         for (const id of persisted) decidedToolIdsRef.current.add(id);
         setDecidedToolIds(new Set(decidedToolIdsRef.current));
       }
-      const trustedPersisted = loadTrustedFromStorage(sid);
-      if (trustedPersisted.size) {
-        for (const n of trustedPersisted) trustedToolNamesRef.current.add(n);
-        setTrustedToolNames(new Set(trustedToolNamesRef.current));
-      }
       client.connectStream(sid, handleEvent);
     },
     [client, handleEvent],
@@ -600,11 +556,6 @@ export function useChat(client: CoworkClient) {
       if (persisted.size) {
         for (const id of persisted) decidedToolIdsRef.current.add(id);
         setDecidedToolIds(new Set(decidedToolIdsRef.current));
-      }
-      const trustedPersisted = loadTrustedFromStorage(existingSessionId);
-      if (trustedPersisted.size) {
-        for (const n of trustedPersisted) trustedToolNamesRef.current.add(n);
-        setTrustedToolNames(new Set(trustedToolNamesRef.current));
       }
 
       if (cached) {
@@ -690,8 +641,6 @@ export function useChat(client: CoworkClient) {
     setAgents([]);
     decidedToolIdsRef.current.clear();
     setDecidedToolIds(new Set());
-    trustedToolNamesRef.current.clear();
-    setTrustedToolNames(new Set());
     setSendingIds(new Set());
     setMessagesSync([]);
     setSendingSync(false);
@@ -709,8 +658,6 @@ export function useChat(client: CoworkClient) {
       setAgents([]);
       decidedToolIdsRef.current = new Set();
       setDecidedToolIds(new Set());
-      trustedToolNamesRef.current = new Set();
-      setTrustedToolNames(new Set());
       setMessagesSync([]);
       setSendingSync(false);
       try {
@@ -768,7 +715,5 @@ export function useChat(client: CoworkClient) {
     agents,
     decidedToolIds,
     markToolDecided,
-    trustedToolNames,
-    markToolTrusted,
   };
 }

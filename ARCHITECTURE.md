@@ -49,11 +49,32 @@ The web UI has four functional regions. Each owns a narrow slice of
 |---|---|---|
 | **Titlebar** | Brand, breadcrumb, policy + python-exec dropdowns, settings/search/bell icons | `GET /v1/sessions/{id}/policy/mode`, `PUT /v1/sessions/{id}/policy/mode`, `GET /v1/sessions/{id}/policy/python_exec`, `PUT /v1/sessions/{id}/policy/python_exec`, `GET /v1/notifications`, `POST /v1/notifications/{id}/read`, `DELETE /v1/notifications`, `GET /v1/search` |
 | **Sessions** | Project grouping, session list + stats, session create / resume / delete, pin / unpin | `GET /v1/projects`, `POST /v1/projects`, `DELETE /v1/projects/{slug}`, `GET /v1/projects/{slug}/sessions`, `POST /v1/sessions`, `POST /v1/sessions/{id}/resume`, `DELETE /v1/projects/{slug}/sessions/{id}`, `PATCH /v1/projects/{slug}/sessions/{id}`, `GET /v1/local-sessions`, `DELETE /v1/local-sessions/{id}`, `PATCH /v1/local-sessions/{id}` |
-| **Chat** | Messages + tool calls + approvals + composer | `POST /v1/sessions/{id}/messages`, `GET /v1/sessions/{id}/history`, `GET /v1/sessions/{id}/events/stream` (SSE), `POST /v1/sessions/{id}/approvals`, `GET /v1/sessions/{id}/approvals`, `POST /v1/projects/{slug}/upload` (F.P4 attach) |
+| **Chat** | Messages + tool calls (unified collapsible card; shellish tools get a terminal-framed body, everything else uses the typed widget renderer) + approvals + composer | `POST /v1/sessions/{id}/messages`, `GET /v1/sessions/{id}/history`, `GET /v1/sessions/{id}/events/stream` (SSE), `POST /v1/sessions/{id}/approvals`, `GET /v1/sessions/{id}/approvals`, `POST /v1/projects/{slug}/upload` (F.P4 attach) |
 | **Canvas** | File tree / preview, multi-tab, rendered / source toggle | `GET /v1/projects/{slug}/files/{path}`, `GET /v1/projects/{slug}/preview/{path}` (+ `?raw=1`), `GET /v1/local-files`, `GET /v1/local-files/content` |
 
 Settings reads `GET /v1/health` for its read-only System /
-Agents-and-tools panes.
+Agents-and-tools panes. The health payload carries the active LLM
+model identifier (`cfg.model.model` from `cowork.toml`) under the
+`model` field so the Settings → System pane can surface what the
+agent is running against without a separate route.
+
+**Transport typing.** The web client (`transport/client.ts`) talks
+to `/v1` through a small `CoworkClient` whose methods return named
+types from `transport/types.ts` — every response shape has a
+declared interface (`SessionListItem`, `HealthInfo`,
+`UploadFileResult`, `SearchResults`, `ToolApprovalResult`,
+`LocalFileListResult`, `LocalFileReadResult`,
+`LocalSessionListItem`). Policy-related methods return literal
+unions (`PolicyMode = "plan" | "work" | "auto"`,
+`PythonExecPolicy = "confirm" | "allow" | "deny"`) rather than
+bare `string`, so a typo at the call site is a build error. Auth
+headers are split into two helpers: `jsonHeaders()` for JSON
+bodies and `authHeaders()` for DELETE + `FormData` uploads where
+the browser sets `Content-Type` itself. SSE URL construction is
+centralised in a `sessionStreamUrl(sessionId)` helper shared by
+`connectStream` (primary session) and `subscribeBackground`
+(auxiliary listeners for sessions whose turn is running while the
+user is looking elsewhere).
 
 ## 3. `CoworkRuntime` — the seam between server and ADK
 

@@ -83,6 +83,9 @@ export interface CompactionSettings {
 
 export interface HealthInfo {
   status: string;
+  /** Active LLM model identifier from ``[model] model`` in cowork.toml.
+   *  Surfaced read-only in Settings → System. */
+  model?: string;
   tools: string[];
   skills: string[];
   compaction?: CompactionSettings;
@@ -126,4 +129,79 @@ export interface Notification {
   /** Unix epoch seconds. */
   created_at: number;
   read: boolean;
+}
+
+/* ───────── Policy surface ───────── */
+
+/** Session policy mode — fresh sessions inherit the server default. */
+export type PolicyMode = "plan" | "work" | "auto";
+
+/** ``python_exec_run`` gate — ``confirm`` surfaces a UI prompt,
+ *  ``allow`` passes through, ``deny`` hard-blocks. */
+export type PythonExecPolicy = "confirm" | "allow" | "deny";
+
+/** Per-agent tool allowlist. Absent agent = unrestricted; empty
+ *  list = silenced. Root agent is unrestricted by design. */
+export type ToolAllowlist = Record<string, string[]>;
+
+/* ───────── Upload / approval / local FS results ───────── */
+
+/** Return shape for ``POST /v1/projects/{slug}/upload``. */
+export interface UploadFileResult {
+  name: string;
+  path: string;
+  size: number;
+}
+
+/** Return shape for ``POST /v1/sessions/{id}/approvals``. */
+export interface ToolApprovalResult {
+  tool: string;
+  remaining: number;
+}
+
+/** Return shape for ``GET /v1/local-files`` (desktop surface). */
+export interface LocalFileListResult {
+  path: string;
+  entries: FileEntry[];
+}
+
+/** Return shape for ``GET /v1/local-files/content``. */
+export interface LocalFileReadResult {
+  path: string;
+  content: string;
+  truncated: boolean;
+  size: number;
+}
+
+/** Return item for ``GET /v1/local-sessions``. Same shape as the
+ *  managed ``SessionListItem``; aliased so consumers can be explicit
+ *  about surface origin. */
+export type LocalSessionListItem = SessionListItem;
+
+/* ───────── ⌘K palette search ───────── */
+
+export interface SearchSessionHit {
+  session_id: string;
+  title: string | null;
+  project: string;
+}
+
+export interface SearchFileHit {
+  project: string;
+  path: string;
+  name: string;
+}
+
+export interface SearchMessageHit {
+  session_id: string;
+  session_title: string | null;
+  project: string;
+  index: number;
+  preview: string;
+}
+
+export interface SearchResults {
+  sessions: SearchSessionHit[];
+  files: SearchFileHit[];
+  messages: SearchMessageHit[];
 }

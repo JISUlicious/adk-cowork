@@ -29,12 +29,6 @@ COWORK_POLICY_MODE_KEY = "cowork.policy_mode"
 # ``cfg.policy.python_exec`` when unset.
 COWORK_PYTHON_EXEC_KEY = "cowork.python_exec"
 
-# Per-session ``dict[str, int]`` — name of a gated tool → number of pending
-# user approvals for it. The permission callback decrements on each
-# consumed approval; the ``POST /v1/sessions/{id}/approvals`` endpoint
-# increments. See ``policy/permissions.py``.
-COWORK_TOOL_APPROVALS_KEY = "cowork.tool_approvals"
-
 # Per-session ``dict[str, list[str]]`` — agent name → allowed tool names.
 # An agent absent from the dict runs unrestricted (default); an empty
 # list effectively silences the agent. Enforced by

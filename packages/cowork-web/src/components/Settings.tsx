@@ -17,8 +17,8 @@
 
 import { useEffect, useState } from "react";
 import type { CoworkClient } from "../transport/client";
-import type { HealthInfo } from "../transport/types";
-import { type ToolStyle, usePreferences } from "../preferences";
+import type { HealthInfo, PolicyMode, PythonExecPolicy } from "../transport/types";
+import { usePreferences } from "../preferences";
 import {
   type ThemeMode,
   applyThemeMode,
@@ -145,28 +145,10 @@ function SecProfile({ userId }: { userId?: string }) {
     <div className="sec">
       <h3>Profile</h3>
       <div className="desc">
-        Identity is taken from the API token you authenticated with. Editing
-        the display name is a follow-up — for now, this is read-only.
+        Identity is taken from the API token you authenticated with.
       </div>
       <Field label="User id">
         <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>{userId ?? "local"}</span>
-      </Field>
-      <Field label="Avatar">
-        <div
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: "50%",
-            background: "var(--accent)",
-            color: "white",
-            display: "grid",
-            placeItems: "center",
-            fontWeight: 600,
-            fontSize: 14,
-          }}
-        >
-          {(userId ?? "·").charAt(0).toUpperCase()}
-        </div>
       </Field>
     </div>
   );
@@ -549,8 +531,8 @@ function describeTool(name: string): string {
 }
 
 function SecApprovals({ client, sessionId }: { client: CoworkClient; sessionId: string | null }) {
-  const [mode, setMode] = useState<string>("work");
-  const [pyExec, setPyExec] = useState<string>("confirm");
+  const [mode, setMode] = useState<PolicyMode>("work");
+  const [pyExec, setPyExec] = useState<PythonExecPolicy>("confirm");
 
   useEffect(() => {
     if (sessionId) {
@@ -561,7 +543,7 @@ function SecApprovals({ client, sessionId }: { client: CoworkClient; sessionId: 
     }
   }, [client, sessionId]);
 
-  const setModeIfActive = async (next: string) => {
+  const setModeIfActive = async (next: PolicyMode) => {
     if (!sessionId) return;
     const previous = mode;
     setMode(next);
@@ -572,7 +554,7 @@ function SecApprovals({ client, sessionId }: { client: CoworkClient; sessionId: 
       setMode(previous);
     }
   };
-  const setPyIfActive = async (next: "confirm" | "allow" | "deny") => {
+  const setPyIfActive = async (next: PythonExecPolicy) => {
     if (!sessionId) return;
     const previous = pyExec;
     setPyExec(next);
@@ -593,7 +575,12 @@ function SecApprovals({ client, sessionId }: { client: CoworkClient; sessionId: 
         ``Auto`` skips confirmation prompts.
       </div>
       <Field label="Policy mode" sub="Applies to the active session.">
-        <Chips value={mode} onChange={setModeIfActive} options={["plan", "work", "auto"]} disabled={!sessionId} />
+        <Chips
+          value={mode}
+          onChange={(v) => setModeIfActive(v as PolicyMode)}
+          options={["plan", "work", "auto"]}
+          disabled={!sessionId}
+        />
       </Field>
       <Field
         label={<span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>python_exec_run</span>}
@@ -601,7 +588,7 @@ function SecApprovals({ client, sessionId }: { client: CoworkClient; sessionId: 
       >
         <Chips
           value={pyExec}
-          onChange={(v) => setPyIfActive(v as "confirm" | "allow" | "deny")}
+          onChange={(v) => setPyIfActive(v as PythonExecPolicy)}
           options={["confirm", "allow", "deny"]}
           disabled={!sessionId}
         />
@@ -643,6 +630,20 @@ function SecSystem({ client }: { client: CoworkClient }) {
         ) : (
           <span style={{ color: "var(--ok)" }}>● {health?.status ?? "unknown"}</span>
         )}
+      </Field>
+      <Field label="Model" sub="Active LLM identifier from cowork.toml.">
+        <span
+          style={{
+            fontFamily: "var(--mono)",
+            fontSize: "var(--fs-sm)",
+            color: "var(--ink-2)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={health?.model ?? ""}
+        >
+          {health?.model ?? "—"}
+        </span>
       </Field>
       <Field label="Tools loaded">
         <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
@@ -716,13 +717,6 @@ function SecAppearance() {
         <span style={{ marginLeft: 10, fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-3)" }}>
           {prefs.accentHue}
         </span>
-      </Field>
-      <Field label="Tool-call style" sub="How tool calls render in chat.">
-        <Chips
-          value={prefs.toolStyle}
-          options={["collapsed", "expanded", "terminal"]}
-          onChange={(v) => update({ toolStyle: v as ToolStyle })}
-        />
       </Field>
     </div>
   );

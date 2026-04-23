@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CoworkClient } from "../transport/client";
-import type { Notification } from "../transport/types";
+import type { Notification, PolicyMode, PythonExecPolicy } from "../transport/types";
 import { Icon } from "./atoms";
 
 interface Props {
@@ -45,8 +45,8 @@ export function Titlebar({
   onOpenSettings,
   onOpenPalette,
 }: Props) {
-  const [policyMode, setPolicyMode] = useState("work");
-  const [pythonExec, setPythonExec] = useState<string>("confirm");
+  const [policyMode, setPolicyMode] = useState<PolicyMode>("work");
+  const [pythonExec, setPythonExec] = useState<PythonExecPolicy>("confirm");
   const [notifOpen, setNotifOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
 
@@ -112,7 +112,7 @@ export function Titlebar({
           onChange={async (e) => {
             if (!sessionId) return;
             const previous = policyMode;
-            const next = e.target.value;
+            const next = e.target.value as PolicyMode;
             setPolicyMode(next);
             try {
               const confirmed = await client.setSessionPolicyMode(sessionId, next);

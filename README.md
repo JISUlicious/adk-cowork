@@ -216,12 +216,12 @@ cosmetic variants); `deferred` entries are planned for a later tier.
 | File updated dot | Canvas | wired | P2a |
 | Approval card (inline) | Chat | wired | V4 |
 | Approval card (banner / queue) | Chat | culled | P1 |
-| Tool-call style (collapsed / expanded / terminal) | Chat | wired | V4 |
+| Tool-call style (unified collapsible) | Chat | wired | post-E |
 | Composer attach | Chat | wired (ref-path v1) | P4 |
 | Composer auto-route pill | Chat | wired (revived) | E2 |
 | Composer @-mention | Chat | wired | E2 |
 | Compaction separator | Chat | wired | E3 |
-| Settings → Appearance (theme / accent / toolStyle) | Settings | wired | V6 |
+| Settings → Appearance (theme / accent) | Settings | wired | V6 / post-E |
 | Settings → Appearance → approval style | Settings | culled | P1 |
 | Settings → Appearance → refinement | Settings | culled | P1 |
 | Settings → Appearance → density / layout | Settings | culled | P4 |

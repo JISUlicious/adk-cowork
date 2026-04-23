@@ -56,8 +56,6 @@ function App({ baseUrl, token }: AppProps = {}) {
     agents,
     decidedToolIds,
     markToolDecided,
-    trustedToolNames,
-    markToolTrusted,
   } = useChat(client);
 
   // Scope passed to useChat — determines managed vs local-dir session type.
@@ -448,8 +446,6 @@ function App({ baseUrl, token }: AppProps = {}) {
             sessionId={sessionId}
             decidedToolIds={decidedToolIds}
             onMarkToolDecided={markToolDecided}
-            trustedToolNames={trustedToolNames}
-            onMarkToolTrusted={markToolTrusted}
             onSend={handleSend}
             onApproveTool={handleApproveTool}
             attach={

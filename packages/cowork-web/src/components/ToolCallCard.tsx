@@ -1,17 +1,15 @@
 /**
- * Tool-call card — three visual modes per the design system.
+ * Tool-call card — single unified style.
  *
- *   collapsed : chip with a status pill; click to expand body.
- *   expanded  : body always shown (no toggle).
- *   terminal  : collapsed chip by default; expands into monospaced
- *               shell-style framing for shellish tools (shell_run /
- *               python_exec_run). Non-shellish tools fall back to the
- *               ``collapsed`` body renderer so we don't terminal-frame
- *               things like ``fs_read`` output.
+ * Renders as a chip with a status pill; click the head to toggle the
+ * body. Shellish tools (`shell_run`, `python_exec_run`) get a
+ * monospaced shell-framed body via ``TerminalBody``; everything else
+ * uses the typed widget renderer (``renderToolWidget``). Confirmation
+ * tool calls auto-open and surface the inline approval banner.
  *
- * The body itself is owned by ``renderToolWidget`` (typed per-tool
- * renderers from M1/F1) — we wrap it in the design-system chrome.
- * Confirmation banner stays inline regardless of mode.
+ * The previous tri-state (``collapsed`` / ``expanded`` / ``terminal``)
+ * was culled because the choice didn't carry weight — only the
+ * collapsible-with-terminal-framing behaviour was load-bearing.
  */
 
 import { useState } from "react";
@@ -21,7 +19,6 @@ import { renderToolWidget } from "./ToolWidgets";
 
 interface Props {
   entry: ToolCallEntry;
-  toolStyle?: "collapsed" | "expanded" | "terminal";
   /** True when the user has already approved/denied this exact tool
    *  call — hides the confirmation banner even if the ADK event
    *  history still reports ``confirmation_required``. Drives
@@ -33,14 +30,11 @@ interface Props {
 
 export function ToolCallCard({
   entry,
-  toolStyle = "collapsed",
   decided: decidedProp,
   onApprove,
   onDeny,
 }: Props) {
-  const [open, setOpen] = useState(
-    toolStyle === "expanded" || entry.status === "confirmation",
-  );
+  const [open, setOpen] = useState(entry.status === "confirmation");
   const [decidedLocal, setDecidedLocal] = useState(false);
   const decided = decidedProp || decidedLocal;
 
@@ -50,24 +44,17 @@ export function ToolCallCard({
   const details = entry.result?.details as Record<string, unknown> | undefined;
 
   const isShellish = SHELLISH_TOOLS.has(entry.name);
-  // ``terminal`` now means "collapsed chip that opens into a
-  // terminal-framed body for shellish tools". Non-shellish tools under
-  // the ``terminal`` pref fall back to the regular collapsed behavior.
-  const useTerminalBody = toolStyle === "terminal" && isShellish;
-
-  const isOpen = toolStyle === "expanded" || open;
   const cardClass = [
     "tool",
-    isOpen ? "open" : "",
-    toolStyle === "expanded" ? "tool-card" : "",
-    useTerminalBody ? "tool-term-host" : "",
+    open ? "open" : "",
+    isShellish ? "tool-term-host" : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   return (
     <div className={cardClass}>
-      <div className="tool-head" onClick={() => toolStyle !== "expanded" && setOpen((v) => !v)}>
+      <div className="tool-head" onClick={() => setOpen((v) => !v)}>
         <span className="ic">
           <Icon name={iconForTool(entry.name)} size={12} />
         </span>
@@ -95,9 +82,9 @@ export function ToolCallCard({
         />
       )}
 
-      {isOpen && (
+      {open && (
         <div className="tool-body">
-          {useTerminalBody ? (
+          {isShellish ? (
             <TerminalBody entry={entry} />
           ) : (() => {
             const widget = renderToolWidget(entry);

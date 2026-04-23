@@ -1,20 +1,28 @@
 /**
  * Typed client for the cowork /v1 protocol.
  *
- * Streams ADK ``Event`` JSON over either SSE (default, browser-friendly)
- * or WebSocket (kept for future bidirectional use). Both wire formats
- * are identical to Google ADK's own ``/run_sse`` / ``/run_live`` — raw
+ * Streams ADK ``Event`` JSON over SSE. The wire format matches Google
+ * ADK's own ``/run_sse`` — raw
  * ``Event.model_dump_json(exclude_none=True, by_alias=True)``.
  */
 
 import type {
   AdkEvent,
-  HealthInfo,
-  SessionInfo,
-  ProjectInfo,
-  SessionListItem,
   FileEntry,
+  HealthInfo,
+  LocalFileListResult,
+  LocalFileReadResult,
+  LocalSessionListItem,
   Notification,
+  PolicyMode,
+  ProjectInfo,
+  PythonExecPolicy,
+  SearchResults,
+  SessionInfo,
+  SessionListItem,
+  ToolAllowlist,
+  ToolApprovalResult,
+  UploadFileResult,
 } from "./types";
 
 export type EventHandler = (ev: AdkEvent) => void;
@@ -22,7 +30,6 @@ export type EventHandler = (ev: AdkEvent) => void;
 export class CoworkClient {
   private baseUrl: string;
   private token: string;
-  private ws: WebSocket | null = null;
   private es: EventSource | null = null;
   private eventHandler: EventHandler | null = null;
   /** Extra SSE streams kept open for sessions that were running when
@@ -36,15 +43,31 @@ export class CoworkClient {
       token ?? (typeof __COWORK_TOKEN__ !== "undefined" ? __COWORK_TOKEN__ : "");
   }
 
-  private headers(): Record<string, string> {
+  /** JSON request headers (content-type + token). Used for every
+   *  method whose body is JSON. */
+  private jsonHeaders(): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
     if (this.token) h["x-cowork-token"] = this.token;
     return h;
   }
 
+  /** Token-only headers. Used for DELETE (no body) and for
+   *  FormData uploads where the browser sets content-type itself. */
+  private authHeaders(): Record<string, string> {
+    return this.token ? { "x-cowork-token": this.token } : {};
+  }
+
+  /** Compose the SSE URL for a session's event stream. Token is
+   *  passed as a query param because ``EventSource`` can't set
+   *  custom request headers. */
+  private sessionStreamUrl(sessionId: string): string {
+    const qs = this.token ? `?token=${encodeURIComponent(this.token)}` : "";
+    return `${this.baseUrl}/v1/sessions/${sessionId}/events/stream${qs}`;
+  }
+
   async health(): Promise<HealthInfo> {
     const r = await fetch(`${this.baseUrl}/v1/health`, {
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`health: ${r.status}`);
     return r.json();
@@ -52,7 +75,7 @@ export class CoworkClient {
 
   async listProjects(): Promise<ProjectInfo[]> {
     const r = await fetch(`${this.baseUrl}/v1/projects`, {
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`listProjects: ${r.status}`);
     return r.json();
@@ -61,7 +84,7 @@ export class CoworkClient {
   async createProject(name: string): Promise<ProjectInfo> {
     const r = await fetch(`${this.baseUrl}/v1/projects`, {
       method: "POST",
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
       body: JSON.stringify({ name }),
     });
     if (!r.ok) throw new Error(`createProject: ${r.status}`);
@@ -71,28 +94,24 @@ export class CoworkClient {
   async listSessions(projectSlug: string): Promise<SessionListItem[]> {
     const r = await fetch(
       `${this.baseUrl}/v1/projects/${projectSlug}/sessions`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`listSessions: ${r.status}`);
     return r.json();
   }
 
   async deleteProject(projectSlug: string): Promise<void> {
-    const h: Record<string, string> = {};
-    if (this.token) h["x-cowork-token"] = this.token;
     const r = await fetch(`${this.baseUrl}/v1/projects/${projectSlug}`, {
       method: "DELETE",
-      headers: h,
+      headers: this.authHeaders(),
     });
     if (!r.ok) throw new Error(`deleteProject: ${r.status}`);
   }
 
   async deleteSession(projectSlug: string, sessionId: string): Promise<void> {
-    const h: Record<string, string> = {};
-    if (this.token) h["x-cowork-token"] = this.token;
     const r = await fetch(
       `${this.baseUrl}/v1/projects/${projectSlug}/sessions/${sessionId}`,
-      { method: "DELETE", headers: h },
+      { method: "DELETE", headers: this.authHeaders() },
     );
     if (!r.ok) throw new Error(`deleteSession: ${r.status}`);
   }
@@ -104,12 +123,12 @@ export class CoworkClient {
     projectSlug: string,
     sessionId: string,
     patch: { pinned?: boolean; title?: string },
-  ): Promise<SessionListItem & { pinned?: boolean }> {
+  ): Promise<SessionListItem> {
     const r = await fetch(
       `${this.baseUrl}/v1/projects/${projectSlug}/sessions/${sessionId}`,
       {
         method: "PATCH",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify(patch),
       },
     );
@@ -121,7 +140,7 @@ export class CoworkClient {
    *  Ephemeral on the server — a restart wipes them. */
   async listNotifications(): Promise<Notification[]> {
     const r = await fetch(`${this.baseUrl}/v1/notifications`, {
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`listNotifications: ${r.status}`);
     const body = (await r.json()) as { notifications: Notification[] };
@@ -131,7 +150,7 @@ export class CoworkClient {
   async markNotificationRead(id: string): Promise<void> {
     const r = await fetch(
       `${this.baseUrl}/v1/notifications/${id}/read`,
-      { method: "POST", headers: this.headers() },
+      { method: "POST", headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`markNotificationRead: ${r.status}`);
   }
@@ -139,7 +158,7 @@ export class CoworkClient {
   async clearNotifications(): Promise<void> {
     const r = await fetch(`${this.baseUrl}/v1/notifications`, {
       method: "DELETE",
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`clearNotifications: ${r.status}`);
   }
@@ -147,119 +166,103 @@ export class CoworkClient {
   /** Cross-project ⌘K palette search. Server caches per (user, q) for
    *  30 s, capped at 50 hits per section — see ``cowork_server/app.py``
    *  ``_run_search``. */
-  async search(q: string): Promise<{
-    sessions: Array<{ session_id: string; title: string | null; project: string }>;
-    files: Array<{ project: string; path: string; name: string }>;
-    messages: Array<{
-      session_id: string;
-      session_title: string | null;
-      project: string;
-      index: number;
-      preview: string;
-    }>;
-  }> {
+  async search(q: string): Promise<SearchResults> {
     const qs = new URLSearchParams({ q });
     const r = await fetch(`${this.baseUrl}/v1/search?${qs.toString()}`, {
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`search: ${r.status}`);
     return r.json();
   }
 
   /** Server-wide default mode — used for sessions that have not been
-   *  opened yet. Read-only in practice today; ``setPolicyMode`` is a
-   *  deprecated shim. Use the session-scoped variants below for real
-   *  mutations. */
-  async getPolicyMode(): Promise<string> {
+   *  opened yet. Read-only; to change mode for an active session, use
+   *  ``setSessionPolicyMode`` below. */
+  async getPolicyMode(): Promise<PolicyMode> {
     const r = await fetch(`${this.baseUrl}/v1/policy/mode`, {
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`getPolicyMode: ${r.status}`);
-    const data = await r.json();
-    return data.mode;
+    return (await r.json()).mode as PolicyMode;
   }
 
-  async getSessionPolicyMode(sessionId: string): Promise<string> {
+  async getSessionPolicyMode(sessionId: string): Promise<PolicyMode> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/mode`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`getSessionPolicyMode: ${r.status}`);
-    const data = await r.json();
-    return data.mode;
+    return (await r.json()).mode as PolicyMode;
   }
 
   async setSessionPolicyMode(
     sessionId: string,
-    mode: string,
-  ): Promise<string> {
+    mode: PolicyMode,
+  ): Promise<PolicyMode> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/mode`,
       {
         method: "PUT",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify({ mode }),
       },
     );
     if (!r.ok) throw new Error(`setSessionPolicyMode: ${r.status}`);
-    const data = await r.json();
-    return data.mode;
+    return (await r.json()).mode as PolicyMode;
   }
 
-  async getSessionPythonExec(sessionId: string): Promise<string> {
+  async getSessionPythonExec(sessionId: string): Promise<PythonExecPolicy> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/python_exec`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`getSessionPythonExec: ${r.status}`);
-    return (await r.json()).policy;
+    return (await r.json()).policy as PythonExecPolicy;
   }
 
   async setSessionPythonExec(
     sessionId: string,
-    policy: "confirm" | "allow" | "deny",
-  ): Promise<string> {
+    policy: PythonExecPolicy,
+  ): Promise<PythonExecPolicy> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/python_exec`,
       {
         method: "PUT",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify({ policy }),
       },
     );
     if (!r.ok) throw new Error(`setSessionPythonExec: ${r.status}`);
-    return (await r.json()).policy;
+    return (await r.json()).policy as PythonExecPolicy;
   }
 
   /** Per-agent tool allowlist (Tier E.E1). Empty dict = no
    *  restrictions; absent agent = unrestricted; empty list = silenced.
    *  Root agent is always unrestricted — the allowlist scopes
    *  specialist sub-agents only. */
-  async getSessionToolAllowlist(
-    sessionId: string,
-  ): Promise<Record<string, string[]>> {
+  async getSessionToolAllowlist(sessionId: string): Promise<ToolAllowlist> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/tool_allowlist`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`getSessionToolAllowlist: ${r.status}`);
-    return (await r.json()).allowlist ?? {};
+    return ((await r.json()).allowlist ?? {}) as ToolAllowlist;
   }
 
   async setSessionToolAllowlist(
     sessionId: string,
-    allowlist: Record<string, string[]>,
-  ): Promise<Record<string, string[]>> {
+    allowlist: ToolAllowlist,
+  ): Promise<ToolAllowlist> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/tool_allowlist`,
       {
         method: "PUT",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify({ allowlist }),
       },
     );
     if (!r.ok) throw new Error(`setSessionToolAllowlist: ${r.status}`);
-    return (await r.json()).allowlist ?? {};
+    return ((await r.json()).allowlist ?? {}) as ToolAllowlist;
   }
 
   /** `@`-mention auto-route flag (Tier E.E2). When on (default), the
@@ -269,7 +272,7 @@ export class CoworkClient {
   async getSessionAutoRoute(sessionId: string): Promise<boolean> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/auto_route`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`getSessionAutoRoute: ${r.status}`);
     return Boolean((await r.json()).enabled);
@@ -283,7 +286,7 @@ export class CoworkClient {
       `${this.baseUrl}/v1/sessions/${sessionId}/policy/auto_route`,
       {
         method: "PUT",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify({ enabled }),
       },
     );
@@ -307,7 +310,7 @@ export class CoworkClient {
     if (opts?.workdir) body.workdir = opts.workdir;
     const r = await fetch(`${this.baseUrl}/v1/sessions`, {
       method: "POST",
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
       body: Object.keys(body).length ? JSON.stringify(body) : undefined,
     });
     if (!r.ok) throw new Error(`createSession: ${r.status}`);
@@ -325,7 +328,7 @@ export class CoworkClient {
       `${this.baseUrl}/v1/sessions/${sessionId}/resume`,
       {
         method: "POST",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify(body),
       },
     );
@@ -342,12 +345,12 @@ export class CoworkClient {
     sessionId: string,
     toolName: string,
     toolCallId?: string,
-  ): Promise<{ tool: string; remaining: number }> {
+  ): Promise<ToolApprovalResult> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/approvals`,
       {
         method: "POST",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify(
           toolCallId
             ? { tool: toolName, tool_call_id: toolCallId }
@@ -362,18 +365,10 @@ export class CoworkClient {
   async listLocalFiles(
     workdir: string,
     path: string = "",
-  ): Promise<{
-    path: string;
-    entries: {
-      name: string;
-      kind: "dir" | "file";
-      size: number | null;
-      modified?: number | null;
-    }[];
-  }> {
+  ): Promise<LocalFileListResult> {
     const qs = new URLSearchParams({ workdir, path });
     const r = await fetch(`${this.baseUrl}/v1/local-files?${qs.toString()}`, {
-      headers: this.headers(),
+      headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`listLocalFiles: ${r.status}`);
     return r.json();
@@ -382,33 +377,29 @@ export class CoworkClient {
   async readLocalFile(
     workdir: string,
     path: string,
-  ): Promise<{ path: string; content: string; truncated: boolean; size: number }> {
+  ): Promise<LocalFileReadResult> {
     const qs = new URLSearchParams({ workdir, path });
     const r = await fetch(
       `${this.baseUrl}/v1/local-files/content?${qs.toString()}`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`readLocalFile: ${r.status}`);
     return r.json();
   }
 
-  async listLocalSessions(
-    workdir: string,
-  ): Promise<{ id: string; created_at: string; title: string | null }[]> {
+  async listLocalSessions(workdir: string): Promise<LocalSessionListItem[]> {
     const r = await fetch(
       `${this.baseUrl}/v1/local-sessions?workdir=${encodeURIComponent(workdir)}`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`listLocalSessions: ${r.status}`);
     return r.json();
   }
 
   async deleteLocalSession(workdir: string, sessionId: string): Promise<void> {
-    const h: Record<string, string> = {};
-    if (this.token) h["x-cowork-token"] = this.token;
     const r = await fetch(
       `${this.baseUrl}/v1/local-sessions/${sessionId}?workdir=${encodeURIComponent(workdir)}`,
-      { method: "DELETE", headers: h },
+      { method: "DELETE", headers: this.authHeaders() },
     );
     if (!r.ok) throw new Error(`deleteLocalSession: ${r.status}`);
   }
@@ -419,12 +410,12 @@ export class CoworkClient {
     workdir: string,
     sessionId: string,
     patch: { pinned?: boolean; title?: string },
-  ): Promise<SessionListItem & { pinned?: boolean }> {
+  ): Promise<SessionListItem> {
     const r = await fetch(
       `${this.baseUrl}/v1/local-sessions/${sessionId}?workdir=${encodeURIComponent(workdir)}`,
       {
         method: "PATCH",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify(patch),
       },
     );
@@ -435,7 +426,7 @@ export class CoworkClient {
   async getHistory(sessionId: string): Promise<AdkEvent[]> {
     const r = await fetch(
       `${this.baseUrl}/v1/sessions/${sessionId}/history`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`getHistory: ${r.status}`);
     return r.json();
@@ -446,7 +437,7 @@ export class CoworkClient {
       `${this.baseUrl}/v1/sessions/${sessionId}/messages`,
       {
         method: "POST",
-        headers: this.headers(),
+        headers: this.jsonHeaders(),
         body: JSON.stringify({ text }),
       },
     );
@@ -459,7 +450,7 @@ export class CoworkClient {
   ): Promise<FileEntry[]> {
     const r = await fetch(
       `${this.baseUrl}/v1/projects/${project}/files/${prefix}`,
-      { headers: this.headers() },
+      { headers: this.jsonHeaders() },
     );
     if (!r.ok) throw new Error(`listFiles: ${r.status}`);
     return r.json();
@@ -475,14 +466,14 @@ export class CoworkClient {
     file: File | Blob,
     filename: string,
     prefix: "files" | "scratch" = "files",
-  ): Promise<{ name: string; path: string; size: number }> {
+  ): Promise<UploadFileResult> {
     const form = new FormData();
     form.append("file", file, filename);
     const r = await fetch(
       `${this.baseUrl}/v1/projects/${project}/upload?prefix=${prefix}`,
       {
         method: "POST",
-        headers: this.token ? { "x-cowork-token": this.token } : {},
+        headers: this.authHeaders(),
         body: form,
       },
     );
@@ -504,8 +495,7 @@ export class CoworkClient {
       this.es = null;
     }
     this.eventHandler = onEvent;
-    const qs = this.token ? `?token=${encodeURIComponent(this.token)}` : "";
-    const url = `${this.baseUrl}/v1/sessions/${sessionId}/events/stream${qs}`;
+    const url = this.sessionStreamUrl(sessionId);
     this.es = new EventSource(url);
 
     this.es.onopen = () => console.log("[cowork] sse open", url);
@@ -531,48 +521,10 @@ export class CoworkClient {
     };
   }
 
-  /** Connect via WebSocket. Kept for callers that want full duplex. */
-  connect(sessionId: string, onEvent: EventHandler): void {
-    this.disconnect();
-    this.eventHandler = onEvent;
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = this.baseUrl
-      ? this.baseUrl.replace(/^https?:/, proto)
-      : `${proto}//${window.location.host}`;
-    const qs = this.token ? `?token=${encodeURIComponent(this.token)}` : "";
-    const url = `${host}/v1/sessions/${sessionId}/events${qs}`;
-    this.ws = new WebSocket(url);
-
-    this.ws.onopen = () => console.log("[cowork] ws open", url);
-    this.ws.onmessage = (ev) => {
-      try {
-        const adkEvent: AdkEvent = JSON.parse(ev.data);
-        this.eventHandler?.(adkEvent);
-      } catch {
-        /* ignore */
-      }
-    };
-    this.ws.onerror = () => {
-      this.eventHandler?.({
-        author: "cowork-client",
-        errorCode: "WS_ERROR",
-        errorMessage: "WebSocket error",
-        turnComplete: true,
-      });
-    };
-    this.ws.onclose = () => {
-      this.ws = null;
-    };
-  }
-
   disconnect(): void {
     if (this.es) {
       this.es.close();
       this.es = null;
-    }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
     }
     this.eventHandler = null;
     for (const es of this.bgStreams.values()) es.close();
@@ -586,9 +538,7 @@ export class CoworkClient {
   subscribeBackground(sessionId: string, onEvent: EventHandler): () => void {
     // Replace any existing background stream for this session.
     this.bgStreams.get(sessionId)?.close();
-    const qs = this.token ? `?token=${encodeURIComponent(this.token)}` : "";
-    const url = `${this.baseUrl}/v1/sessions/${sessionId}/events/stream${qs}`;
-    const es = new EventSource(url);
+    const es = new EventSource(this.sessionStreamUrl(sessionId));
     es.onmessage = (ev) => {
       try {
         const adkEvent: AdkEvent = JSON.parse(ev.data);

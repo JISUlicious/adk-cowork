@@ -7,18 +7,19 @@
  * comes from ``ChatMessage.agent`` populated by ``useChat``; the
  * agent's color drives the avatar swatch via ``agentStyle``.
  *
- * Tool-call chrome is owned by ``ToolCallCard`` which honors the
- * ``toolStyle`` preference (``collapsed`` | ``expanded`` | ``terminal``).
- * Approval chrome is inline inside ``ToolCallCard``; the banner /
- * queue variants from the design prototype were dropped in Phase
- * F.P1 because they were cosmetic with no behavioural difference.
+ * Tool-call chrome is owned by ``ToolCallCard``: every call renders
+ * collapsible-by-default with a terminal-framed body for shellish
+ * tools (``shell_run`` / ``python_exec_run``) and the typed widget
+ * renderer for everything else. Approval chrome is inline inside
+ * ``ToolCallCard``; the banner / queue variants from the design
+ * prototype were dropped in Phase F.P1 because they were cosmetic
+ * with no behavioural difference.
  */
 
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../hooks/useChat";
-import { usePreferences } from "../preferences";
 import type { CoworkClient } from "../transport/client";
 import { copyIntoWorkdir, isTauri, pickFiles, readLocalFileBytes } from "../transport/tauri";
 import { agentStyle, AgentStack, Icon } from "./atoms";
@@ -57,13 +58,6 @@ interface Props {
    *  page reloads or the session is re-entered. */
   decidedToolIds?: Set<string>;
   onMarkToolDecided?: (toolId: string) => void;
-  /** Tool *names* the user has trusted for the session. A subsequent
-   *  ``confirmation_required`` for a trusted tool is auto-approved
-   *  without showing the banner — so approving ``python_exec_run``
-   *  once covers the agent's next invocation even after the app
-   *  relaunches and the server's approval counter is empty. */
-  trustedToolNames?: Set<string>;
-  onMarkToolTrusted?: (toolName: string) => void;
   onSend: (text: string) => void;
   onApproveTool?: (
     toolName: string,
@@ -90,7 +84,6 @@ export function Chat({
   onDenyTool,
   attach,
 }: Props) {
-  const [prefs] = usePreferences();
   const [input, setInput] = useState("");
   const [attached, setAttached] = useState<Attachment[]>([]);
   const [attachBusy, setAttachBusy] = useState(false);
@@ -365,7 +358,6 @@ export function Chat({
                 <MessageRow
                   m={m}
                   historical={historical}
-                  toolStyle={prefs.toolStyle}
                   decidedToolIds={decidedToolIds}
                   onMarkToolDecided={onMarkToolDecided}
                   onApproveTool={onApproveTool}
@@ -563,7 +555,6 @@ export function Chat({
 function MessageRow({
   m,
   historical,
-  toolStyle,
   decidedToolIds,
   onMarkToolDecided,
   onApproveTool,
@@ -572,7 +563,6 @@ function MessageRow({
 }: {
   m: ChatMessage;
   historical?: boolean;
-  toolStyle: "collapsed" | "expanded" | "terminal";
   decidedToolIds?: Set<string>;
   onMarkToolDecided?: (toolId: string) => void;
   onApproveTool?: (toolName: string, summary: string) => void | Promise<void>;
@@ -635,7 +625,6 @@ function MessageRow({
         )}
         {renderSegments(m, {
           historical,
-          toolStyle,
           decidedToolIds,
           onMarkToolDecided,
           onApproveTool,
@@ -662,7 +651,6 @@ function renderSegments(
   m: ChatMessage,
   handlers: {
     historical?: boolean;
-    toolStyle: "collapsed" | "expanded" | "terminal";
     decidedToolIds?: Set<string>;
     onMarkToolDecided?: (toolId: string) => void;
     onApproveTool?: (
@@ -687,7 +675,6 @@ function renderSegments(
       <ToolCallCard
         key={tc.id}
         entry={tc}
-        toolStyle={handlers.toolStyle}
         decided={decided}
         onApprove={async (toolName, summary) => {
           handlers.onMarkToolDecided?.(tc.id);

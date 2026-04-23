@@ -21,7 +21,6 @@ from cowork_core.tools.base import (
     COWORK_PYTHON_EXEC_KEY,
     COWORK_READS_KEY,
     COWORK_TOOL_ALLOWLIST_KEY,
-    COWORK_TOOL_APPROVALS_KEY,
     CoworkToolContext,
     get_cowork_context,
 )
@@ -34,7 +33,6 @@ __all__ = [
     "COWORK_PYTHON_EXEC_KEY",
     "COWORK_READS_KEY",
     "COWORK_TOOL_ALLOWLIST_KEY",
-    "COWORK_TOOL_APPROVALS_KEY",
     "CoworkToolContext",
     "ToolRegistry",
     "get_cowork_context",

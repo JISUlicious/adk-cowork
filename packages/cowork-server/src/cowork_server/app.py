@@ -83,6 +83,11 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 "limiter": "ok",
                 "sessions": "ok",
             },
+            # Active LLM model identifier (from ``[model] model`` in
+            # ``cowork.toml``) so the UI can surface what the agent is
+            # running against. Read-only; runtime swaps require a
+            # config reload.
+            "model": cfg.model.model,
             "tools": runtime.tools.names(),
             "skills": runtime.skills.names(),
             "compaction": {
@@ -98,23 +103,10 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     @app.get("/v1/policy/mode")
     async def get_policy_mode(user: UserIdentity = Depends(guard)) -> dict[str, str]:
-        """Server-wide default used for fresh sessions. Read-only today."""
+        """Server-wide default used for fresh sessions. Read-only — to
+        mutate mode for an active session, use
+        ``PUT /v1/sessions/{id}/policy/mode``."""
         return {"mode": default_policy_mode}
-
-    @app.put("/v1/policy/mode")
-    async def set_policy_mode(
-        body: dict[str, Any],
-        user: UserIdentity = Depends(guard),
-    ) -> dict[str, str]:
-        """Deprecated: use ``/v1/sessions/{id}/policy/mode`` instead.
-
-        Accepts and validates the mode but does not mutate the server default.
-        Clients should move to the per-session endpoint.
-        """
-        mode = body.get("mode", "")
-        if mode not in ("plan", "work", "auto"):
-            raise HTTPException(status_code=400, detail="mode must be plan, work, or auto")
-        return {"mode": mode}
 
     @app.get("/v1/sessions/{session_id}/policy/mode")
     async def get_session_policy_mode(
