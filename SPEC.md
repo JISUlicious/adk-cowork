@@ -274,6 +274,8 @@ HTTP + WebSocket, JSON, versioned at `/v1`:
 
 ADK `Event` objects map 1:1 onto the WS stream — no impedance mismatch.
 
+The full route inventory is auto-published as an OpenAPI 3 schema at `/openapi.json` (Swagger UI at `/docs`, ReDoc at `/redoc`). Request and response shapes are declared as Pydantic models in `cowork_server/api_models.py`; auth uses an `x-cowork-token` header advertised as the `cowork-token` security scheme. WebSocket routes don't appear in the OpenAPI schema; the SSE / WS event payload format is `Event.model_dump_json(exclude_none=True, by_alias=True)` per ADK's `/run_sse` contract.
+
 ### 2.8 File-canvas UI
 
 React + Vite. Left pane = chat. Right pane = **canvas** listing workspace files, each openable in a type-specific viewer:

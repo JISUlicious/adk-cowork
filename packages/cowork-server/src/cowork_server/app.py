@@ -2,12 +2,20 @@
 
 All shared state is behind abstract protocols (EventBus, AuthGuard,
 ConnectionLimiter) so backends can be swapped without touching routes.
+
+The OpenAPI schema is published at ``/openapi.json`` and rendered at
+``/docs`` (Swagger UI) + ``/redoc``. Routes are tagged into the same
+groups used by the UI panes documented in ``ARCHITECTURE.md §2``;
+auth uses an ``x-cowork-token`` header advertised as the
+``cowork-token`` security scheme so Swagger's Authorize button
+unlocks "Try it out".
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Any
 
 from cowork_core import CoworkConfig, CoworkRuntime, PreviewCache, build_runtime
@@ -23,14 +31,89 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
+from fastapi.security import APIKeyHeader
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from google.genai import types as genai_types
 
+from cowork_server.api_models import (
+    AutoRouteResponse,
+    ClearNotificationsResponse,
+    CreateProjectRequest,
+    CreateSessionRequest,
+    DeleteResponse,
+    FileEntry,
+    GrantApprovalRequest,
+    GrantApprovalResponse,
+    HealthResponse,
+    LocalFileListResult,
+    LocalFileReadResult,
+    LocalSessionListItem,
+    MarkReadResponse,
+    MessageAcceptedResponse,
+    NotificationItem,
+    NotificationsListResponse,
+    PatchLocalSessionRequest,
+    PatchSessionRequest,
+    PolicyMode,
+    PolicyModeResponse,
+    ProjectInfo,
+    PythonExecPolicy,
+    PythonExecResponse,
+    ResumeSessionRequest,
+    SearchResults,
+    SendMessageRequest,
+    SessionInfo,
+    SessionListItem,
+    SetAutoRouteRequest,
+    SetPolicyModeRequest,
+    SetPythonExecRequest,
+    SetToolAllowlistRequest,
+    ToolAllowlistResponse,
+    UploadFileResult,
+)
 from cowork_server.auth import UserIdentity, create_guard, generate_token
 from cowork_server.connections import InMemoryConnectionLimiter
 from cowork_server.queues import InMemoryEventBus
 from cowork_server.transport import event_to_payload, events_to_history
+
+
+def _server_version() -> str:
+    """Best-effort server version. Falls back to ``"0.1.0"`` when the
+    package metadata isn't installed (editable installs without a build)."""
+    try:
+        return _pkg_version("cowork-core")
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
+_OPENAPI_TAGS: list[dict[str, str]] = [
+    {"name": "health", "description": "Service status + active model."},
+    {"name": "sessions", "description": "Session lifecycle (create / resume / history / messages / delete)."},
+    {"name": "policy", "description": "Per-session policy: mode, python_exec, tool allowlist, @-route."},
+    {"name": "approvals", "description": "Tool-call confirmation grants."},
+    {"name": "notifications", "description": "Per-user notification inbox."},
+    {"name": "search", "description": "Cross-project ⌘K palette search."},
+    {"name": "projects", "description": "Managed-mode project CRUD."},
+    {"name": "files", "description": "Managed-mode artifact files (list / upload / preview)."},
+    {"name": "local-dir", "description": "Desktop-mode workdir browsing + sessions."},
+    {"name": "streams", "description": "SSE / WebSocket event streams."},
+]
+
+
+# OpenAPI security scheme advertising the `x-cowork-token` header.
+# This dependency exists purely to teach the schema about auth so the
+# Swagger UI shows an Authorize button; the actual token check still
+# happens through the ``guard`` dependency on each route.
+_api_key_scheme = APIKeyHeader(
+    name="x-cowork-token",
+    scheme_name="cowork-token",
+    description=(
+        "Bearer-style token. Sidecar mode prints it at startup; "
+        "multi-user mode reads it from `[auth].keys` in cowork.toml."
+    ),
+    auto_error=False,
+)
 
 
 def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> FastAPI:
@@ -47,7 +130,21 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     # Default policy from config — never mutated at runtime
     default_policy_mode = cfg.policy.mode
 
-    app = FastAPI(title="cowork-server")
+    app = FastAPI(
+        title="cowork-server",
+        description=(
+            "HTTP + SSE/WS surface for Cowork — an office-work copilot "
+            "built on Google ADK. Routes are grouped by UI pane "
+            "(see ARCHITECTURE.md §2) and authenticated via an "
+            "`x-cowork-token` header."
+        ),
+        version=_server_version(),
+        openapi_tags=_OPENAPI_TAGS,
+        # Advertise the auth scheme on every route. The actual token
+        # check stays inside ``guard`` — this dependency just teaches
+        # OpenAPI / Swagger about it.
+        dependencies=[Depends(_api_key_scheme)],
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r"^(tauri://.*|https?://(localhost|127\.0\.0\.1)(:\d+)?|https://tauri\.localhost)$",
@@ -64,7 +161,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Health ─────────────────────────────────────────────────────────
 
-    @app.get("/v1/health")
+    @app.get(
+        "/v1/health",
+        tags=["health"],
+        summary="Service status + active model",
+        response_model=HealthResponse,
+    )
     async def health() -> dict[str, Any]:
         """Service + per-component status.
 
@@ -101,14 +203,24 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Policy (per-session, falls back to server default) ─────────────
 
-    @app.get("/v1/policy/mode")
+    @app.get(
+        "/v1/policy/mode",
+        tags=["policy"],
+        summary="Server-default policy mode",
+        response_model=PolicyModeResponse,
+    )
     async def get_policy_mode(user: UserIdentity = Depends(guard)) -> dict[str, str]:
         """Server-wide default used for fresh sessions. Read-only — to
         mutate mode for an active session, use
         ``PUT /v1/sessions/{id}/policy/mode``."""
         return {"mode": default_policy_mode}
 
-    @app.get("/v1/sessions/{session_id}/policy/mode")
+    @app.get(
+        "/v1/sessions/{session_id}/policy/mode",
+        tags=["policy"],
+        summary="Get session policy mode",
+        response_model=PolicyModeResponse,
+    )
     async def get_session_policy_mode(
         session_id: str,
         user: UserIdentity = Depends(guard),
@@ -121,16 +233,20 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"mode": mode}
 
-    @app.put("/v1/sessions/{session_id}/policy/mode")
+    @app.put(
+        "/v1/sessions/{session_id}/policy/mode",
+        tags=["policy"],
+        summary="Set session policy mode",
+        response_model=PolicyModeResponse,
+    )
     async def set_session_policy_mode(
         session_id: str,
-        body: dict[str, Any],
+        body: SetPolicyModeRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
-        mode = body.get("mode", "")
         try:
             applied = await runtime.set_session_policy_mode(
-                session_id=session_id, mode=mode, user_id=user.user_id,
+                session_id=session_id, mode=body.mode, user_id=user.user_id,
             )
         except ValueError as exc:
             # 400 for unknown mode, 404 for missing session.
@@ -139,7 +255,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"mode": applied}
 
-    @app.get("/v1/sessions/{session_id}/policy/python_exec")
+    @app.get(
+        "/v1/sessions/{session_id}/policy/python_exec",
+        tags=["policy"],
+        summary="Get python_exec_run policy",
+        response_model=PythonExecResponse,
+    )
     async def get_session_python_exec_policy(
         session_id: str,
         user: UserIdentity = Depends(guard),
@@ -152,16 +273,20 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"policy": policy}
 
-    @app.put("/v1/sessions/{session_id}/policy/python_exec")
+    @app.put(
+        "/v1/sessions/{session_id}/policy/python_exec",
+        tags=["policy"],
+        summary="Set python_exec_run policy",
+        response_model=PythonExecResponse,
+    )
     async def set_session_python_exec_policy(
         session_id: str,
-        body: dict[str, Any],
+        body: SetPythonExecRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
-        policy = body.get("policy", "")
         try:
             applied = await runtime.set_session_python_exec(
-                session_id=session_id, policy=policy, user_id=user.user_id,
+                session_id=session_id, policy=body.policy, user_id=user.user_id,
             )
         except ValueError as exc:
             if "unknown python_exec policy" in str(exc):
@@ -169,7 +294,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"policy": applied}
 
-    @app.get("/v1/sessions/{session_id}/policy/tool_allowlist")
+    @app.get(
+        "/v1/sessions/{session_id}/policy/tool_allowlist",
+        tags=["policy"],
+        summary="Get per-agent tool allowlist",
+        response_model=ToolAllowlistResponse,
+    )
     async def get_session_tool_allowlist_policy(
         session_id: str,
         user: UserIdentity = Depends(guard),
@@ -188,25 +318,27 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"allowlist": allowlist}
 
-    @app.put("/v1/sessions/{session_id}/policy/tool_allowlist")
+    @app.put(
+        "/v1/sessions/{session_id}/policy/tool_allowlist",
+        tags=["policy"],
+        summary="Replace tool allowlist",
+        response_model=ToolAllowlistResponse,
+    )
     async def set_session_tool_allowlist_policy(
         session_id: str,
-        body: dict[str, Any],
+        body: SetToolAllowlistRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, Any]:
         """Replace the per-agent tool allowlist for the session.
 
         Body: ``{"allowlist": {"researcher": ["fs_read", ...], ...}}``.
         Agents absent from the dict run unrestricted; an empty list for
-        an agent silences it (every tool call is blocked). Send ``{}``
-        to clear all restrictions.
+        an agent silences it (every tool call is blocked). Send
+        ``{"allowlist": {}}`` to clear all restrictions.
         """
-        raw = body.get("allowlist")
-        if raw is None:
-            raise HTTPException(status_code=400, detail="'allowlist' is required")
         try:
             applied = await runtime.set_session_tool_allowlist(
-                session_id=session_id, allowlist=raw, user_id=user.user_id,
+                session_id=session_id, allowlist=body.allowlist, user_id=user.user_id,
             )
         except ValueError as exc:
             message = str(exc)
@@ -215,7 +347,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=400, detail=message) from exc
         return {"allowlist": applied}
 
-    @app.get("/v1/sessions/{session_id}/policy/auto_route")
+    @app.get(
+        "/v1/sessions/{session_id}/policy/auto_route",
+        tags=["policy"],
+        summary="Get @-mention auto-route flag",
+        response_model=AutoRouteResponse,
+    )
     async def get_session_auto_route_policy(
         session_id: str,
         user: UserIdentity = Depends(guard),
@@ -230,10 +367,15 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"enabled": enabled}
 
-    @app.put("/v1/sessions/{session_id}/policy/auto_route")
+    @app.put(
+        "/v1/sessions/{session_id}/policy/auto_route",
+        tags=["policy"],
+        summary="Toggle @-mention auto-route",
+        response_model=AutoRouteResponse,
+    )
     async def set_session_auto_route_policy(
         session_id: str,
-        body: dict[str, Any],
+        body: SetAutoRouteRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, bool]:
         """Toggle the session's ``@``-mention auto-route flag.
@@ -242,14 +384,9 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         omits the routing directive and a leading ``@name`` is treated
         as plain text.
         """
-        raw = body.get("enabled")
-        if not isinstance(raw, bool):
-            raise HTTPException(
-                status_code=400, detail="'enabled' must be a bool",
-            )
         try:
             applied = await runtime.set_session_auto_route(
-                session_id=session_id, enabled=raw, user_id=user.user_id,
+                session_id=session_id, enabled=body.enabled, user_id=user.user_id,
             )
         except ValueError as exc:
             message = str(exc)
@@ -260,7 +397,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Per-session tool approvals ─────────────────────────────────────
 
-    @app.get("/v1/sessions/{session_id}/approvals")
+    @app.get(
+        "/v1/sessions/{session_id}/approvals",
+        tags=["approvals"],
+        summary="List pending tool approvals",
+        response_model=dict[str, int],
+    )
     async def list_approvals(
         session_id: str,
         user: UserIdentity = Depends(guard),
@@ -273,10 +415,15 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/v1/sessions/{session_id}/approvals")
+    @app.post(
+        "/v1/sessions/{session_id}/approvals",
+        tags=["approvals"],
+        summary="Grant a tool approval",
+        response_model=GrantApprovalResponse,
+    )
     async def grant_approval(
         session_id: str,
-        body: dict[str, Any],
+        body: GrantApprovalRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, Any]:
         """Grant one approval for a tool name.
@@ -289,18 +436,14 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         specific call as resolved — the UI then doesn't re-prompt for an
         approval the user already acted on.
         """
-        tool = body.get("tool", "")
-        tool_call_id = body.get("tool_call_id") or ""
-        if not isinstance(tool, str) or not tool:
-            raise HTTPException(status_code=400, detail="'tool' is required")
         try:
             remaining = await runtime.grant_tool_approval(
-                session_id=session_id, tool_name=tool, user_id=user.user_id,
+                session_id=session_id, tool_name=body.tool, user_id=user.user_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        if isinstance(tool_call_id, str) and tool_call_id:
+        if body.tool_call_id:
             # Record the approval in a side-channel log (never ADK
             # session state — that would race the runner's OCC-guarded
             # appends and trip ``last_update_time`` errors mid-turn,
@@ -309,18 +452,23 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             # serve it via ``/history`` and publish it live.
             ev_payload = runtime.approval_log.record(
                 session_id=session_id,
-                tool_name=tool,
-                tool_call_id=tool_call_id,
+                tool_name=body.tool,
+                tool_call_id=body.tool_call_id,
             )
             import json as _json
 
             await bus.publish(session_id, _json.dumps(ev_payload))
 
-        return {"tool": tool, "remaining": remaining}
+        return {"tool": body.tool, "remaining": remaining}
 
     # ── Notifications ──────────────────────────────────────────────────
 
-    @app.get("/v1/notifications")
+    @app.get(
+        "/v1/notifications",
+        tags=["notifications"],
+        summary="List user notifications",
+        response_model=NotificationsListResponse,
+    )
     async def list_notifications(
         user: UserIdentity = Depends(guard),
     ) -> dict[str, Any]:
@@ -334,7 +482,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         notes = runtime.notifications.list(user.user_id)
         return {"notifications": [n.to_wire() for n in notes]}
 
-    @app.post("/v1/notifications/{notification_id}/read")
+    @app.post(
+        "/v1/notifications/{notification_id}/read",
+        tags=["notifications"],
+        summary="Mark notification read",
+        response_model=MarkReadResponse,
+    )
     async def mark_notification_read(
         notification_id: str,
         user: UserIdentity = Depends(guard),
@@ -344,7 +497,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail="notification not found")
         return {"id": notification_id, "read": True}
 
-    @app.delete("/v1/notifications")
+    @app.delete(
+        "/v1/notifications",
+        tags=["notifications"],
+        summary="Clear all notifications",
+        response_model=ClearNotificationsResponse,
+    )
     async def clear_notifications(
         user: UserIdentity = Depends(guard),
     ) -> dict[str, int]:
@@ -353,7 +511,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Global search (⌘K palette — F.P6b) ────────────────────────────
 
-    @app.get("/v1/search")
+    @app.get(
+        "/v1/search",
+        tags=["search"],
+        summary="Cross-project palette search",
+        response_model=SearchResults,
+    )
     async def search(
         q: str,
         user: UserIdentity = Depends(guard),
@@ -391,9 +554,14 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Sessions ───────────────────────────────────────────────────────
 
-    @app.post("/v1/sessions")
+    @app.post(
+        "/v1/sessions",
+        tags=["sessions"],
+        summary="Create session",
+        response_model=SessionInfo,
+    )
     async def create_session(
-        body: dict[str, Any] | None = None,
+        body: CreateSessionRequest | None = None,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
         """Create a new session.
@@ -405,11 +573,8 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         Supplying ``workdir`` is the **surface selector**: present = desktop,
         absent = web. Providing both is rejected.
         """
-        project_name: str | None = None
-        workdir: str | None = None
-        if body is not None:
-            project_name = body.get("project")
-            workdir = body.get("workdir")
+        project_name = body.project if body else None
+        workdir = body.workdir if body else None
         if project_name and workdir:
             raise HTTPException(
                 status_code=400,
@@ -430,14 +595,19 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             "workdir": str(workdir) if workdir else "",
         }
 
-    @app.post("/v1/sessions/{session_id}/resume")
+    @app.post(
+        "/v1/sessions/{session_id}/resume",
+        tags=["sessions"],
+        summary="Resume existing session",
+        response_model=SessionInfo,
+    )
     async def resume_session(
         session_id: str,
-        body: dict[str, Any],
+        body: ResumeSessionRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
-        project_slug = body.get("project") or None
-        workdir = body.get("workdir") or None
+        project_slug = body.project or None
+        workdir = body.workdir or None
         if not project_slug and not workdir:
             raise HTTPException(
                 status_code=400, detail="project or workdir is required",
@@ -465,7 +635,11 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             "workdir": str(workdir) if workdir else "",
         }
 
-    @app.get("/v1/sessions/{session_id}/history")
+    @app.get(
+        "/v1/sessions/{session_id}/history",
+        tags=["sessions"],
+        summary="Get session event history",
+    )
     async def session_history(
         session_id: str,
         user: UserIdentity = Depends(guard),
@@ -482,7 +656,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Local-dir file browser (desktop surface) ───────────────────────
 
-    @app.get("/v1/local-files")
+    @app.get(
+        "/v1/local-files",
+        tags=["local-dir"],
+        summary="List workdir files",
+        response_model=LocalFileListResult,
+    )
     async def list_local_files(
         workdir: str,
         path: str = "",
@@ -531,7 +710,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             })
         return {"path": path or ".", "entries": entries}
 
-    @app.get("/v1/local-files/content")
+    @app.get(
+        "/v1/local-files/content",
+        tags=["local-dir"],
+        summary="Read workdir file content",
+        response_model=LocalFileReadResult,
+    )
     async def read_local_file(
         workdir: str,
         path: str,
@@ -563,7 +747,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Local-dir sessions (desktop surface) ───────────────────────────
 
-    @app.get("/v1/local-sessions")
+    @app.get(
+        "/v1/local-sessions",
+        tags=["local-dir"],
+        summary="List workdir sessions",
+        response_model=list[LocalSessionListItem],
+    )
     async def list_local_sessions_endpoint(
         workdir: str,
         user: UserIdentity = Depends(guard),
@@ -582,11 +771,16 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             for s in sessions
         ]
 
-    @app.patch("/v1/local-sessions/{session_id}")
+    @app.patch(
+        "/v1/local-sessions/{session_id}",
+        tags=["local-dir"],
+        summary="Update local session metadata",
+        response_model=LocalSessionListItem,
+    )
     async def patch_local_session(
         session_id: str,
         workdir: str,
-        body: dict[str, Any],
+        body: PatchLocalSessionRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, Any]:
         """Mutate a local-dir session's metadata. Mirrors managed
@@ -596,14 +790,11 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
         from pathlib import Path as _P
 
-        pinned = body.get("pinned")
-        if pinned is None:
+        if body.pinned is None:
             raise HTTPException(status_code=400, detail="'pinned' is required")
-        if not isinstance(pinned, bool):
-            raise HTTPException(status_code=400, detail="'pinned' must be a bool")
         try:
             session = runtime.set_local_session_pinned(
-                _P(workdir), session_id, pinned,
+                _P(workdir), session_id, body.pinned,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -614,7 +805,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             "pinned": session.pinned,
         }
 
-    @app.delete("/v1/local-sessions/{session_id}")
+    @app.delete(
+        "/v1/local-sessions/{session_id}",
+        tags=["local-dir"],
+        summary="Delete local session",
+        response_model=DeleteResponse,
+    )
     async def delete_local_session_endpoint(
         session_id: str,
         workdir: str,
@@ -629,15 +825,19 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         )
         return {"status": "ok"}
 
-    @app.post("/v1/sessions/{session_id}/messages")
+    @app.post(
+        "/v1/sessions/{session_id}/messages",
+        tags=["sessions"],
+        summary="Send user message (fire-and-forget)",
+        response_model=MessageAcceptedResponse,
+    )
     async def send_message(
         session_id: str,
-        body: dict[str, Any],
+        body: SendMessageRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
-        text = body.get("text", "")
         task = asyncio.create_task(
-            _run_turn(runtime, bus, session_id, str(text), user.user_id)
+            _run_turn(runtime, bus, session_id, body.text, user.user_id)
         )
         # Fire-and-forget — errors are published as events
         task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
@@ -645,7 +845,11 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Event Streaming ────────────────────────────────────────────────
 
-    @app.get("/v1/sessions/{session_id}/events/stream")
+    @app.get(
+        "/v1/sessions/{session_id}/events/stream",
+        tags=["streams"],
+        summary="SSE event stream (ADK Event JSON per frame)",
+    )
     async def events_sse(
         session_id: str,
         user: UserIdentity = Depends(guard),
@@ -710,7 +914,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Projects ───────────────────────────────────────────────────────
 
-    @app.get("/v1/projects")
+    @app.get(
+        "/v1/projects",
+        tags=["projects"],
+        summary="List user projects",
+        response_model=list[ProjectInfo],
+    )
     async def list_projects(user: UserIdentity = Depends(guard)) -> list[dict[str, str]]:
         projects = runtime.registry_for(user.user_id).list()
         return [
@@ -718,21 +927,28 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             for p in projects
         ]
 
-    @app.post("/v1/projects")
+    @app.post(
+        "/v1/projects",
+        tags=["projects"],
+        summary="Create project",
+        response_model=ProjectInfo,
+    )
     async def create_project(
-        body: dict[str, Any],
+        body: CreateProjectRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, str]:
-        name = body.get("name", "")
-        if not name:
-            raise HTTPException(status_code=400, detail="name is required")
         try:
-            project = runtime.registry_for(user.user_id).create(name)
+            project = runtime.registry_for(user.user_id).create(body.name)
         except Exception as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"slug": project.slug, "name": project.name, "created_at": project.created_at}
 
-    @app.get("/v1/projects/{project}/sessions")
+    @app.get(
+        "/v1/projects/{project}/sessions",
+        tags=["projects"],
+        summary="List project sessions",
+        response_model=list[SessionListItem],
+    )
     async def list_sessions(
         project: str,
         user: UserIdentity = Depends(guard),
@@ -759,11 +975,16 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 })
         return result
 
-    @app.patch("/v1/projects/{project}/sessions/{session_id}")
+    @app.patch(
+        "/v1/projects/{project}/sessions/{session_id}",
+        tags=["projects"],
+        summary="Update project-session metadata",
+        response_model=SessionListItem,
+    )
     async def patch_session(
         project: str,
         session_id: str,
-        body: dict[str, Any],
+        body: PatchSessionRequest,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, Any]:
         """Mutate a session's ``session.toml`` metadata.
@@ -774,14 +995,11 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         concurrent PATCHes don't race.
         """
 
-        pinned = body.get("pinned")
-        if pinned is None:
+        if body.pinned is None:
             raise HTTPException(status_code=400, detail="'pinned' is required")
-        if not isinstance(pinned, bool):
-            raise HTTPException(status_code=400, detail="'pinned' must be a bool")
         try:
             session = runtime.registry_for(user.user_id).set_session_pinned(
-                project, session_id, pinned,
+                project, session_id, body.pinned,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -792,7 +1010,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             "pinned": session.pinned,
         }
 
-    @app.delete("/v1/projects/{project}")
+    @app.delete(
+        "/v1/projects/{project}",
+        tags=["projects"],
+        summary="Delete project",
+        response_model=DeleteResponse,
+    )
     async def delete_project(
         project: str,
         user: UserIdentity = Depends(guard),
@@ -803,7 +1026,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {"status": "deleted"}
 
-    @app.delete("/v1/projects/{project}/sessions/{session_id}")
+    @app.delete(
+        "/v1/projects/{project}/sessions/{session_id}",
+        tags=["projects"],
+        summary="Delete project session",
+        response_model=DeleteResponse,
+    )
     async def delete_session(
         project: str,
         session_id: str,
@@ -817,7 +1045,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
 
     # ── Files ──────────────────────────────────────────────────────────
 
-    @app.get("/v1/projects/{project}/files/{path:path}")
+    @app.get(
+        "/v1/projects/{project}/files/{path:path}",
+        tags=["files"],
+        summary="List project files",
+        response_model=list[FileEntry],
+    )
     async def list_files(
         project: str,
         path: str,
@@ -840,7 +1073,12 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             })
         return entries
 
-    @app.post("/v1/projects/{project}/upload")
+    @app.post(
+        "/v1/projects/{project}/upload",
+        tags=["files"],
+        summary="Upload file to project",
+        response_model=UploadFileResult,
+    )
     async def upload_file(
         project: str,
         user: UserIdentity = Depends(guard),
@@ -862,7 +1100,11 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 size += len(chunk)
         return {"name": basename, "path": f"{prefix}/{basename}", "size": size}
 
-    @app.get("/v1/projects/{project}/preview/{path:path}")
+    @app.get(
+        "/v1/projects/{project}/preview/{path:path}",
+        tags=["files"],
+        summary="Render file preview",
+    )
     async def preview_file(
         project: str,
         path: str,

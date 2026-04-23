@@ -192,9 +192,11 @@ relative paths rooted at the user's chosen folder.
 ## Feature wire-up status
 
 Every UI affordance introduced by the Phase V visual overhaul, the E3
-compaction pipeline, or the Phase F wire-up plan. Rows flip as each
-phase lands. `culled` entries were intentionally removed (dupes or
-cosmetic variants); `deferred` entries are planned for a later tier.
+compaction pipeline, the Phase F wire-up plan, Tier E (per-agent
+allowlist + `@`-mention routing), and the post-Tier-E refactor (dead-
+code cull + Swagger surface). Rows flip as each phase lands. `culled`
+entries were intentionally removed (dupes or cosmetic variants);
+`deferred` entries are planned for a later tier.
 
 | Affordance | Surface | Status | Phase |
 |---|---|---|---|
@@ -205,7 +207,7 @@ cosmetic variants); `deferred` entries are planned for a later tier.
 | Notification bell (sessions footer) | Sessions | culled | P1 |
 | Status dots (running / done) | Sessions | wired | V3 |
 | Status dot (waiting) | Sessions | wired | P2b |
-| Agent monogram stack | Sessions | wired | V3 |
+| Agent monogram stack (session rows) | Sessions | culled | post-E |
 | Session search (local) | Sessions | wired | V3 |
 | Session search (global, ⌘K) | Sessions | wired (global) | P6 |
 | Session meta (N msgs · M files) | Sessions | wired | P3a |
@@ -225,11 +227,12 @@ cosmetic variants); `deferred` entries are planned for a later tier.
 | Settings → Appearance → approval style | Settings | culled | P1 |
 | Settings → Appearance → refinement | Settings | culled | P1 |
 | Settings → Appearance → density / layout | Settings | culled | P4 |
-| Settings → Agents & tools (read-only) | Settings | wired | V6 / P1 |
+| Settings → Agents & tools | Settings | wired | V6 / P1 / E1 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |
-| Settings → System (health + compaction) | Settings | wired | V6 / E3 |
+| Settings → System (health + active model + compaction) | Settings | wired | V6 / E3 / R3a |
+| API reference (OpenAPI / Swagger UI / ReDoc) | Server | wired | post-E |
 
 ## Project layout
 
@@ -256,6 +259,20 @@ uv run ruff format --check .     # format check
 uv run mypy packages             # type check
 uv run pytest -q                 # run tests
 ```
+
+## API reference
+
+The server exposes its own OpenAPI schema:
+
+- **Swagger UI** — `http://127.0.0.1:<port>/docs`
+- **ReDoc** — `http://127.0.0.1:<port>/redoc`
+- **Schema** — `http://127.0.0.1:<port>/openapi.json`
+
+Routes are grouped by the same UI panes documented in
+[ARCHITECTURE.md §2](ARCHITECTURE.md). Click **Authorize** in
+Swagger and paste the `x-cowork-token` value (printed at server
+startup, or read from `[auth].keys` in `cowork.toml` for
+multi-user mode) to unlock "Try it out" calls.
 
 ## Documentation
 

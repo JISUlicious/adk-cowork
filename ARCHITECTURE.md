@@ -58,6 +58,19 @@ model identifier (`cfg.model.model` from `cowork.toml`) under the
 `model` field so the Settings → System pane can surface what the
 agent is running against without a separate route.
 
+The same pane → routes mapping is auto-published as an OpenAPI
+schema at `/openapi.json` (Swagger UI at `/docs`, ReDoc at
+`/redoc`). Routes are tagged into the ten groups above; auth uses
+an `x-cowork-token` header advertised as the `cowork-token`
+security scheme so Swagger's Authorize button unlocks "Try it
+out". Request and response shapes are declared as Pydantic models
+in `cowork_server/api_models.py` and mirrored on the client side
+in `cowork-web/src/transport/types.ts` — kept in sync by hand for
+now; auto-generated TS codegen from the OpenAPI schema is a future
+step. WebSocket routes don't appear in the OpenAPI schema (the
+spec doesn't model them); SSE / WS frame shapes are documented in
+§4 (`_run_turn` lifecycle) instead.
+
 **Transport typing.** The web client (`transport/client.ts`) talks
 to `/v1` through a small `CoworkClient` whose methods return named
 types from `transport/types.ts` — every response shape has a

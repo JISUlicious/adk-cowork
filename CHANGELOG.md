@@ -179,3 +179,34 @@ message — no server-side binding. Fix makes both work.
 - update packages/cowork-web/src/components/ChatPane.tsx — Approve button calls onApproveTool (hits /approvals endpoint) BEFORE sending the text follow-up
 - update packages/cowork-web/src/App.tsx — handleApproveTool posts to /v1/sessions/{sid}/approvals then the existing send() nudges the model
 - update tests/test_policy.py — new tests for python_exec confirm/allow/deny, approval counter consumption, and email_send confirm-prompt
+
+
+### Phase F + Tier E + post-Tier-E refactor + Swagger surface (2026-04-21 → 2026-04-23)
+
+Phase F (commit ea921f2) shipped the wire-up plan: cleanup pass, file-updated dot, session waiting dot, session stats, pin/favourite, composer attachments, ephemeral notifications, ⌘K command palette. E3 compaction integrated alongside.
+
+Tier E (commit 8f0768e) added per-agent tool allowlist (E1) and inline @-mention routing with auto-route pill revival (E2). Agent enable/disable roster culled to Tier F.
+
+Post-Tier-E refactor (commit f2052cb) — net 332 deletions, 269 insertions:
+- remove COWORK_TOOL_APPROVALS_KEY (declared but never set/read)
+- remove deprecated PUT /v1/policy/mode (no client consumers; GET stays as display fallback)
+- remove CoworkClient.connect() WebSocket entry point (unused)
+- remove trustedToolNames / markToolTrusted / TRUSTED_STORAGE_PREFIX (unwired from approval flow)
+- simplify Settings SecProfile to single user-id row
+- collapse tool-call style (collapsed/expanded/terminal) to single unified collapsible card; drop ToolStyle preference
+- add transport/types.ts named types: PolicyMode, PythonExecPolicy, ToolAllowlist, SearchResults, UploadFileResult, ToolApprovalResult, LocalFileListResult, LocalFileReadResult, LocalSessionListItem
+- split CoworkClient.headers() into jsonHeaders() + authHeaders(); extract sessionStreamUrl() helper
+- add active-model field to /v1/health + Settings → System "Model" row
+
+Swagger / OpenAPI surface (S1+S2):
+- add openapi_tags grouping (10 tags); every HTTP route gets tag + summary
+- register cowork-token APIKeyHeader security scheme so Swagger Authorize works
+- add cowork_server/api_models.py with Pydantic models mirroring transport/types.ts
+- replace dict[str, Any] request/response shapes with named models throughout app.py
+- add tests/test_openapi.py (6 tests) covering metadata, tags, security scheme, named request bodies, policy enums
+
+Documentation overhaul (S3):
+- update README.md feature table — flip rows for unified tool-call style, agent-monogram cull, Settings agents (now interactive), System (now carries model), API reference; bump intro paragraph to mention Tier E + post-E
+- update README.md — new "API reference" section pointing at /docs, /redoc, /openapi.json
+- update ARCHITECTURE.md §2 — note OpenAPI publishing and Pydantic model location
+- update SPEC.md §2.7 — mention OpenAPI / Swagger surface
