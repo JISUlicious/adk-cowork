@@ -19,7 +19,7 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Any
 
 from cowork_core import CoworkConfig, CoworkRuntime, PreviewCache, build_runtime
-from cowork_core.runner import APP_NAME
+from cowork_core.runner import APP_NAME, SkillInstallError
 from fastapi import (
     Depends,
     FastAPI,
@@ -42,10 +42,12 @@ from cowork_server.api_models import (
     CreateProjectRequest,
     CreateSessionRequest,
     DeleteResponse,
+    DeleteSkillResult,
     FileEntry,
     GrantApprovalRequest,
     GrantApprovalResponse,
     HealthResponse,
+    InstallSkillResult,
     LocalFileListResult,
     LocalFileReadResult,
     LocalSessionListItem,
@@ -98,6 +100,7 @@ _OPENAPI_TAGS: list[dict[str, str]] = [
     {"name": "files", "description": "Managed-mode artifact files (list / upload / preview)."},
     {"name": "local-dir", "description": "Desktop-mode workdir browsing + sessions."},
     {"name": "streams", "description": "SSE / WebSocket event streams."},
+    {"name": "skills", "description": "User-installable skill bundles (zip install / uninstall)."},
 ]
 
 
@@ -196,6 +199,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                     "name": s.name,
                     "description": s.description,
                     "license": s.license,
+                    "source": s.source,
                 }
                 for s in runtime.skills.all_skills()
             ],
@@ -515,6 +519,60 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
     ) -> dict[str, int]:
         removed = runtime.notifications.clear(user.user_id)
         return {"cleared": removed}
+
+    # ── Skills (user-installable bundles) ─────────────────────────────
+
+    @app.post(
+        "/v1/skills",
+        tags=["skills"],
+        summary="Install a skill from a zip archive",
+        response_model=InstallSkillResult,
+    )
+    async def install_skill(
+        file: UploadFile = File(...),
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        """Upload a ``.zip`` containing exactly one
+        ``<name>/SKILL.md`` bundle. Extracts to
+        ``<workspace>/global/skills/<name>/`` atomically; validation
+        failures (bad frontmatter, path traversal, zip-bomb,
+        bundled-name collision) return 400."""
+        try:
+            data = await file.read()
+        finally:
+            await file.close()
+        try:
+            installed = runtime.install_skill_zip(data)
+        except SkillInstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "name": installed.name,
+            "description": installed.description,
+            "license": installed.license,
+            "source": installed.source,
+        }
+
+    @app.delete(
+        "/v1/skills/{name}",
+        tags=["skills"],
+        summary="Uninstall a user-installed skill",
+        response_model=DeleteSkillResult,
+    )
+    async def uninstall_skill(
+        name: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        """Remove the folder under ``<workspace>/global/skills/<name>/``
+        and reload the registry. Bundled skills return 400; unknown
+        names return 404."""
+        try:
+            runtime.uninstall_skill(name)
+        except SkillInstallError as exc:
+            message = str(exc)
+            if message.startswith("unknown skill"):
+                raise HTTPException(status_code=404, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {"name": name, "status": "deleted"}
 
     # ── Global search (⌘K palette — F.P6b) ────────────────────────────
 

@@ -59,6 +59,26 @@ DEFAULT_PROJECT_NAME = "Default"
 # user's files.
 _LOCAL_COWORK_DIR = ".cowork"
 
+# Valid skill names — alphanumeric + single dashes / underscores, no
+# path separators or shell metacharacters. Applied to both the
+# archive's top-level directory and the frontmatter ``name`` field
+# during install.
+_SKILL_NAME_PATTERN = __import__("re").compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+
+
+class SkillInstallError(Exception):
+    """Raised by ``install_skill_zip`` / ``uninstall_skill`` for any
+    user-facing validation failure. The server maps this to HTTP 400
+    with the exception message as the detail."""
+
+
+def _validate_skill_name(name: str) -> None:
+    if not _SKILL_NAME_PATTERN.match(name):
+        raise SkillInstallError(
+            f"invalid skill name {name!r} "
+            f"(must match ``[A-Za-z0-9][A-Za-z0-9_-]{{0,63}}``)",
+        )
+
 
 @dataclass
 class CoworkRuntime:
@@ -143,10 +163,10 @@ class CoworkRuntime:
         """
         session_skills = SkillRegistry(_skills=dict(self.skills._skills))
         if workdir is not None:
-            session_skills.scan(workdir / ".cowork" / "skills")
+            session_skills.scan(workdir / ".cowork" / "skills", source="workdir")
             env: Any = LocalDirExecEnv(workdir=workdir, session_id=session.id)
         else:
-            session_skills.scan(project.skills_dir)
+            session_skills.scan(project.skills_dir, source="project")
             env = ManagedExecEnv(project=project, session=session)
         return CoworkToolContext(
             workspace=self.workspace_for(user_id),
@@ -297,6 +317,177 @@ class CoworkRuntime:
                 title=session.title,
                 pinned=bool(pinned),
             )
+
+    def reload_skills(self) -> None:
+        """Rescan all skill roots into ``self.skills``. Used by the
+        install/uninstall routes to pick up a newly-dropped folder
+        without a process restart. Preserves bundled-before-user
+        precedence so a user-installed skill can still override a
+        bundled one of the same name."""
+        fresh = SkillRegistry()
+        fresh.scan(_bundled_skills_dir(), source="bundled")
+        fresh.scan(_user_config_dir() / "skills", source="user")
+        fresh.scan(_user_skills_dir(self.workspace), source="user")
+        # Mutate the existing dict in-place so any ReadonlyContext
+        # closures still see the updated registry.
+        self.skills._skills.clear()
+        self.skills._skills.update(fresh._skills)
+
+    def install_skill_zip(self, data: bytes) -> "Skill":
+        """Install a user skill from a zip archive. Returns the parsed
+        ``Skill`` on success; raises ``SkillInstallError`` with a
+        user-safe message on any validation failure.
+
+        The archive must contain exactly one top-level directory
+        ``<name>/`` with a valid ``SKILL.md``. ``name`` is parsed
+        from the frontmatter and must match the directory name. All
+        files extract under ``<workspace>/global/skills/<name>/``
+        atomically (via a temp dir + rename), so a validation error
+        leaves the existing skill tree untouched.
+        """
+        import io
+        import shutil
+        import tempfile
+        import uuid
+        import zipfile
+        from cowork_core.skills import Skill, SkillLoadError, parse_skill_md
+
+        max_zip_bytes = 5 * 1024 * 1024        # 5 MB archive cap
+        max_extracted_bytes = 10 * 1024 * 1024  # 10 MB total
+        max_entries = 200
+
+        if len(data) == 0:
+            raise SkillInstallError("empty archive")
+        if len(data) > max_zip_bytes:
+            raise SkillInstallError(
+                f"archive too large: {len(data)} bytes (max {max_zip_bytes})",
+            )
+
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile as exc:
+            raise SkillInstallError(f"not a valid zip: {exc}") from exc
+
+        members = zf.infolist()
+        if len(members) == 0:
+            raise SkillInstallError("empty archive")
+        if len(members) > max_entries:
+            raise SkillInstallError(
+                f"too many entries: {len(members)} (max {max_entries})",
+            )
+
+        # Validate member names + compute total uncompressed size
+        # before extraction (zip-bomb guard).
+        top_names: set[str] = set()
+        total_size = 0
+        for m in members:
+            n = m.filename
+            if n.startswith("/") or ".." in Path(n).parts:
+                raise SkillInstallError(f"unsafe path in archive: {n!r}")
+            if not n:
+                raise SkillInstallError("empty member name")
+            # Zip slip: reject backslashes on Windows too.
+            if "\\" in n:
+                raise SkillInstallError(f"unsafe path in archive: {n!r}")
+            first = Path(n).parts[0]
+            top_names.add(first)
+            total_size += m.file_size
+            if total_size > max_extracted_bytes:
+                raise SkillInstallError(
+                    f"archive expands to >{max_extracted_bytes} bytes",
+                )
+
+        if len(top_names) != 1:
+            raise SkillInstallError(
+                f"archive must contain exactly one top-level directory "
+                f"(found {sorted(top_names)})",
+            )
+        top = next(iter(top_names))
+        _validate_skill_name(top)
+
+        # Collision with bundled skills is always rejected; collision
+        # with an existing user skill replaces it (same semantics as
+        # the scan-last-wins rule).
+        existing = self.skills._skills.get(top)
+        if existing is not None and existing.source == "bundled":
+            raise SkillInstallError(
+                f"cannot install {top!r}: a bundled skill already owns that name",
+            )
+
+        dest_root = _user_skills_dir(self.workspace)
+        dest_root.mkdir(parents=True, exist_ok=True)
+        final_dir = dest_root / top
+        # Extract into a uniquely-named staging dir under the same
+        # parent, then rename over the final path. Any exception
+        # before the rename leaves the final tree alone.
+        staging = dest_root / f".install-{uuid.uuid4().hex[:12]}"
+        try:
+            staging.mkdir(parents=True)
+            zf.extractall(staging)
+            skill_md = staging / top / "SKILL.md"
+            if not skill_md.is_file():
+                raise SkillInstallError(
+                    f"missing {top}/SKILL.md at archive root",
+                )
+            try:
+                parsed = parse_skill_md(skill_md, source="user")
+            except SkillLoadError as exc:
+                raise SkillInstallError(str(exc)) from exc
+            if parsed.name != top:
+                raise SkillInstallError(
+                    f"frontmatter name {parsed.name!r} does not match "
+                    f"archive directory {top!r}",
+                )
+            # Atomic swap: remove any existing user-install then rename.
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+            (staging / top).rename(final_dir)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+
+        self.reload_skills()
+        # Return the installed skill by re-reading from the live
+        # registry so callers see the final mounted location.
+        installed = self.skills._skills.get(top)
+        if installed is None:
+            # Defensive — reload_skills should have re-picked it up.
+            raise SkillInstallError(
+                f"installed skill {top!r} did not reappear in registry",
+            )
+        return installed
+
+    def uninstall_skill(self, name: str) -> None:
+        """Remove a user-installed skill from
+        ``<workspace>/global/skills/<name>/`` and reload the registry.
+
+        Raises ``SkillInstallError`` if the skill is bundled
+        (not removable), unknown, or resolves to a path outside the
+        user skills dir (defensive)."""
+        import shutil
+
+        _validate_skill_name(name)
+        existing = self.skills._skills.get(name)
+        if existing is None:
+            raise SkillInstallError(f"unknown skill: {name!r}")
+        if existing.source != "user":
+            raise SkillInstallError(
+                f"cannot uninstall {name!r}: source is {existing.source!r}",
+            )
+        # Confirm the on-disk path is under the user skills dir so a
+        # stale registry entry can't delete somewhere unexpected.
+        dest_root = _user_skills_dir(self.workspace).resolve()
+        try:
+            resolved = existing.root.resolve()
+        except OSError as exc:
+            raise SkillInstallError(f"cannot resolve skill root: {exc}") from exc
+        if not resolved.is_relative_to(dest_root):
+            raise SkillInstallError(
+                f"refusing to delete {resolved} (outside {dest_root})",
+            )
+        if resolved.exists():
+            shutil.rmtree(resolved)
+        self.reload_skills()
 
     async def delete_local_session(
         self,
@@ -691,6 +882,15 @@ def _user_config_dir() -> Path:
     return Path.home() / ".config" / "cowork"
 
 
+def _user_skills_dir(workspace: Workspace) -> Path:
+    """Where the user-install flow lands skills — the spec-canonical
+    ``<workspace>/global/skills/`` directory. Separate from
+    ``_user_config_dir() / "skills"`` (which is for shared-across-
+    workspaces XDG config) so a user's managed workspace has a
+    stable, writable, uninstallable skill home."""
+    return workspace.root / "global" / "skills"
+
+
 def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     if cfg.runtime.backend != "local":
         raise NotImplementedError(
@@ -702,8 +902,13 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     workspace = Workspace(root=cfg.workspace.root)
     projects = ProjectRegistry(workspace=workspace)
     skills = SkillRegistry()
-    skills.scan(_bundled_skills_dir())
-    skills.scan(_user_config_dir() / "skills")
+    # Three scan scopes, in precedence order (later scans override on
+    # name collision): bundled → XDG user config → workspace-global.
+    # The workspace-global path is the target of the install/uninstall
+    # flow (``POST /v1/skills`` + ``DELETE /v1/skills/{name}``).
+    skills.scan(_bundled_skills_dir(), source="bundled")
+    skills.scan(_user_config_dir() / "skills", source="user")
+    skills.scan(_user_skills_dir(workspace), source="user")
 
     tool_registry = ToolRegistry()
     register_fs_tools(tool_registry)
@@ -717,7 +922,12 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     agent = build_root_agent(
         cfg,
         tools=tool_registry.as_list(),
+        # Pass the live registry so mid-process reloads (via
+        # ``reload_skills()``) land in existing sessions' next turn.
+        # ``skills_snippet`` is still the fallback for tests that
+        # don't want a registry.
         skills_snippet=skills.injection_snippet(),
+        skills=skills,
     )
 
     global_dir = workspace.root / "global"

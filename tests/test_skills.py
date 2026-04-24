@@ -194,6 +194,167 @@ async def test_runtime_picks_up_project_skills(tmp_path: Path) -> None:
     assert ctx.skills.get("custom").load_body().strip() == "custom body from project"
 
 
+def _zip_skill(name: str, description: str = "zipped skill") -> bytes:
+    """Build an in-memory zip containing exactly ``<name>/SKILL.md``."""
+    import io
+    import zipfile
+
+    frontmatter = (
+        f"---\nname: {name}\ndescription: \"{description}\"\nlicense: MIT\n---\n\nbody\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"{name}/SKILL.md", frontmatter)
+    return buf.getvalue()
+
+
+def _zip_with_path(path: str, body: str = "---\nname: x\ndescription: y\n---\nz") -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(path, body)
+    return buf.getvalue()
+
+
+def test_install_skill_happy_path(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    assert "mytool" not in runtime.skills.names()
+
+    installed = runtime.install_skill_zip(_zip_skill("mytool"))
+    assert installed.name == "mytool"
+    assert installed.source == "user"
+    # Registry sees it after reload.
+    assert "mytool" in runtime.skills.names()
+    # The archive landed under <workspace>/global/skills/<name>/.
+    assert (tmp_path / "global" / "skills" / "mytool" / "SKILL.md").is_file()
+
+
+def test_install_skill_rejects_bundled_collision(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import SkillInstallError, build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    # ``docx-basic`` ships bundled — user can't shadow it via install.
+    assert runtime.skills.get("docx-basic").source == "bundled"
+    with _pytest.raises(SkillInstallError, match="bundled"):
+        runtime.install_skill_zip(_zip_skill("docx-basic"))
+
+
+def test_install_skill_rejects_path_traversal(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import SkillInstallError, build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    data = _zip_with_path("../evil/SKILL.md")
+    with _pytest.raises(SkillInstallError, match="unsafe path"):
+        runtime.install_skill_zip(data)
+
+
+def test_install_skill_rejects_missing_skill_md(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import SkillInstallError, build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    # archive with a folder but no SKILL.md
+    data = _zip_with_path("mytool/README.md", body="hi")
+    with _pytest.raises(SkillInstallError, match="SKILL.md"):
+        runtime.install_skill_zip(data)
+
+
+def test_install_skill_rejects_name_mismatch(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import SkillInstallError, build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    # Top-level dir says ``alpha`` but frontmatter says ``beta``.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "alpha/SKILL.md",
+            '---\nname: beta\ndescription: "b"\nlicense: MIT\n---\nbody\n',
+        )
+    with _pytest.raises(SkillInstallError, match="does not match"):
+        runtime.install_skill_zip(buf.getvalue())
+
+
+def test_install_skill_rejects_invalid_name(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import SkillInstallError, build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    with _pytest.raises(SkillInstallError, match="invalid skill name"):
+        runtime.install_skill_zip(_zip_skill("has space"))
+
+
+def test_uninstall_user_skill_removes_folder(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    runtime.install_skill_zip(_zip_skill("ephemeral"))
+    dest = tmp_path / "global" / "skills" / "ephemeral"
+    assert dest.is_dir()
+
+    runtime.uninstall_skill("ephemeral")
+    assert not dest.exists()
+    assert "ephemeral" not in runtime.skills.names()
+
+
+def test_uninstall_bundled_rejected(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import SkillInstallError, build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    with _pytest.raises(SkillInstallError, match="bundled"):
+        runtime.uninstall_skill("docx-basic")
+
+
+@_pytest.mark.asyncio
+async def test_install_skill_appears_in_root_prompt_without_restart(tmp_path: Path) -> None:
+    """B2 — ``_dynamic_instruction`` must re-query the live registry so
+    a newly-installed skill appears in the root agent's prompt
+    snippet on the *next* invocation without re-building the agent."""
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+
+    # Sanity: snippet doesn't mention ``freshly`` yet.
+    assert "freshly" not in runtime.skills.injection_snippet()
+
+    runtime.install_skill_zip(_zip_skill("freshly", description="new install"))
+    # After install, the live snippet includes the new entry.
+    snippet = runtime.skills.injection_snippet()
+    assert "freshly" in snippet
+    assert "new install" in snippet
+
+
 @_pytest.mark.asyncio
 async def test_runtime_project_skill_shadows_global(tmp_path: Path) -> None:
     """Bundled ``docx-basic`` ships under cowork-core; a project's own

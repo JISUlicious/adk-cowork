@@ -20,6 +20,7 @@ import type {
   SearchResults,
   SessionInfo,
   SessionListItem,
+  SkillInfo,
   ToolAllowlist,
   ToolApprovalResult,
   UploadFileResult,
@@ -161,6 +162,39 @@ export class CoworkClient {
       headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`clearNotifications: ${r.status}`);
+  }
+
+  /** Install a user-owned skill from a zip archive. Body is
+   *  ``multipart/form-data`` with a single ``file`` field; server
+   *  expands under ``<workspace>/global/skills/<name>/`` after
+   *  validating the archive shape + frontmatter. 400 on any
+   *  validation failure. */
+  async installSkill(file: File | Blob, filename = "skill.zip"): Promise<SkillInfo> {
+    const form = new FormData();
+    form.append("file", file, filename);
+    const r = await fetch(`${this.baseUrl}/v1/skills`, {
+      method: "POST",
+      headers: this.authHeaders(),
+      body: form,
+    });
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`installSkill: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
+  /** Uninstall a user-owned skill. Bundled skills return 400;
+   *  unknown names return 404. */
+  async uninstallSkill(name: string): Promise<void> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/skills/${encodeURIComponent(name)}`,
+      { method: "DELETE", headers: this.authHeaders() },
+    );
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`uninstallSkill: ${r.status} — ${detail}`);
+    }
   }
 
   /** Cross-project ⌘K palette search. Server caches per (user, q) for

@@ -35,12 +35,26 @@ class SkillInfo(BaseModel):
     Mirrors ``cowork_core.skills.Skill`` — ``name`` + ``description``
     match what the root agent's prompt registry shows; ``license``
     lets the UI surface Cowork's MIT default vs. user-installed
-    third-party skills at a glance.
+    third-party skills at a glance. ``source`` discriminates where
+    the skill came from; Settings uses it to disable the uninstall
+    affordance on bundled skills.
     """
 
     name: str
     description: str
     license: str
+    source: str = "bundled"
+
+
+class InstallSkillResult(SkillInfo):
+    """Return shape for ``POST /v1/skills``. Identical to
+    ``SkillInfo``; a separate model keeps the Swagger example on
+    the install route obvious."""
+
+
+class DeleteSkillResult(BaseModel):
+    name: str
+    status: str  # always ``"deleted"`` for now
 
 
 class HealthResponse(BaseModel):
@@ -303,8 +317,9 @@ class PatchLocalSessionRequest(BaseModel):
 
 
 __all__ = [
-    # health
+    # health + skills
     "CompactionInfo", "HealthResponse", "SkillInfo",
+    "InstallSkillResult", "DeleteSkillResult",
     # projects
     "ProjectInfo", "CreateProjectRequest", "DeleteResponse",
     # sessions

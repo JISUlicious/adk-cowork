@@ -18,11 +18,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml  # type: ignore[import-untyped]
 
 _FRONTMATTER_FENCE = "---"
+
+# Where a skill came from. ``bundled`` ships inside the
+# ``cowork-core`` package and is immutable; ``user`` lives under
+# ``<workspace>/global/skills/`` and can be uninstalled by the user.
+# ``project`` / ``workdir`` skills are session-scoped and not
+# removable via the uninstall flow either (they belong to the
+# project owner, not the current session user). Slice B uses this
+# to gate the uninstall path.
+SkillSource = Literal["bundled", "user", "project", "workdir"]
 
 
 class SkillLoadError(Exception):
@@ -36,6 +45,7 @@ class Skill:
     license: str
     root: Path
     frontmatter: dict[str, Any] = field(default_factory=dict)
+    source: SkillSource = "bundled"
 
     @property
     def skill_md(self) -> Path:
@@ -63,8 +73,14 @@ class Skill:
         }
 
 
-def parse_skill_md(path: Path) -> Skill:
-    """Parse a ``SKILL.md`` file into a ``Skill`` (body loaded lazily)."""
+def parse_skill_md(path: Path, source: SkillSource = "bundled") -> Skill:
+    """Parse a ``SKILL.md`` file into a ``Skill`` (body loaded lazily).
+
+    ``source`` tags the provenance. Callers picking a skill up from a
+    user-writable location (``<workspace>/global/skills/``) pass
+    ``"user"`` so the uninstall flow can find it; the default
+    matches the common case of bundled package assets.
+    """
     if not path.is_file():
         raise SkillLoadError(f"not a file: {path}")
     text = path.read_text(encoding="utf-8")
@@ -84,6 +100,7 @@ def parse_skill_md(path: Path) -> Skill:
         license=license_val,
         root=path.parent,
         frontmatter=fm,
+        source=source,
     )
 
 
@@ -93,8 +110,13 @@ class SkillRegistry:
 
     _skills: dict[str, Skill] = field(default_factory=dict)
 
-    def scan(self, root: Path) -> int:
-        """Scan ``root`` for ``<name>/SKILL.md`` entries. Returns count added."""
+    def scan(self, root: Path, source: SkillSource = "bundled") -> int:
+        """Scan ``root`` for ``<name>/SKILL.md`` entries. Returns count added.
+
+        Later scans overwrite earlier ones with the same ``name`` —
+        that's how the ``project`` / ``workdir`` scan layers on top of
+        bundled + user-global defaults inside ``_build_context``.
+        """
         if not root.is_dir():
             return 0
         added = 0
@@ -104,7 +126,7 @@ class SkillRegistry:
             skill_md = entry / "SKILL.md"
             if not skill_md.is_file():
                 continue
-            skill = parse_skill_md(skill_md)
+            skill = parse_skill_md(skill_md, source=source)
             self._skills[skill.name] = skill
             added += 1
         return added

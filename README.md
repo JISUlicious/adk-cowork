@@ -230,6 +230,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Settings → Agents & tools | Settings | wired | V6 / P1 / E1 |
 | Skills: project-scoped override | Core | wired | Slice A T1 |
 | Settings → Skills (name + description + license) | Settings | wired | Slice A T2 |
+| Skills: install / uninstall UX (.zip) | Settings | wired | Slice B |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

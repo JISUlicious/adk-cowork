@@ -196,10 +196,18 @@ def build_root_agent(
     cfg: CoworkConfig,
     tools: Sequence[BaseTool] | None = None,
     skills_snippet: str = "",
+    skills: Any = None,
 ) -> LlmAgent:
     # Dynamic instruction — resolved per turn so the working-context paragraph
     # reflects the session's ExecEnv and the policy-mode addendum reflects
     # whatever mode the session is currently in.
+    #
+    # ``skills``, when supplied, is the live ``SkillRegistry`` from the
+    # runtime. We re-query its ``injection_snippet()`` on every turn so
+    # skills installed mid-process (via POST /v1/skills) show up in
+    # existing sessions' root prompt on the next model call without a
+    # restart. Callers that don't pass it (tests, light harnesses)
+    # fall back to the static ``skills_snippet`` string.
     def _dynamic_instruction(ctx: ReadonlyContext) -> str:
         working_context = _env_description(ctx)
         mode = ctx.state.get(COWORK_POLICY_MODE_KEY, cfg.policy.mode)
@@ -208,8 +216,9 @@ def build_root_agent(
         # feature off for the session.
         raw_auto_route = ctx.state.get(COWORK_AUTO_ROUTE_KEY, True)
         auto_route = raw_auto_route if isinstance(raw_auto_route, bool) else True
+        snippet = skills.injection_snippet() if skills is not None else skills_snippet
         return _compose_instruction(
-            working_context, skills_snippet, mode, auto_route=auto_route,
+            working_context, snippet, mode, auto_route=auto_route,
         )
 
     model = build_model(cfg.model)

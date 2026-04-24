@@ -57,14 +57,36 @@ Agents-and-tools panes. The health payload carries the active LLM
 model identifier (`cfg.model.model` from `cowork.toml`) under the
 `model` field so the Settings → System pane can surface what the
 agent is running against without a separate route. The `skills`
-field is a list of `{name, description, license}` records so the
-Settings → Skills list shows what each skill does, not just its
-name. Skill discovery runs at three scopes — bundled (shipped
-with `cowork-core`), user-global (`~/.config/cowork/skills/`),
-and per-session (`<project>/skills/` in managed mode or
-`<workdir>/.cowork/skills/` in local-dir mode); the project /
-workdir scan happens inside `_build_context` so a project's skill
-shadows a global one of the same name for that session only.
+field is a list of `{name, description, license, source}`
+records — Settings → Skills renders the description and gates the
+uninstall affordance on `source == "user"` so bundled skills show
+a locked icon.
+
+**Skill scopes.** Discovery runs at four scopes (later scans
+override earlier ones on name collision):
+
+1. **bundled** — shipped inside `cowork-core`
+   (`skills/bundled/`); immutable.
+2. **user (XDG)** — `~/.config/cowork/skills/` for shared-across-
+   workspaces installs.
+3. **user (workspace-global)** — `<workspace>/global/skills/`,
+   the target of the install/uninstall routes.
+4. **session-scoped** — `<project>/skills/` (managed) or
+   `<workdir>/.cowork/skills/` (local-dir), picked up inside
+   `_build_context`.
+
+**Install / uninstall.** `POST /v1/skills` accepts a zip archive
+containing exactly one `<name>/SKILL.md` bundle, validates
+(frontmatter parse, name-matches-dir, path-traversal, zip-bomb
+size cap, bundled-collision), and extracts atomically into
+`<workspace>/global/skills/<name>/` via a staging directory →
+rename. `DELETE /v1/skills/{name}` removes the folder and
+`runtime.reload_skills()` rescans all scopes in place. The root
+agent's prompt registry line is re-read from
+`runtime.skills.injection_snippet()` on every turn
+(`_dynamic_instruction` closes over the live registry, not a
+static string) so newly-installed skills appear in the next
+turn's prompt without a process restart.
 
 The same pane → routes mapping is auto-published as an OpenAPI
 schema at `/openapi.json` (Swagger UI at `/docs`, ReDoc at

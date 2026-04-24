@@ -47,7 +47,7 @@ def test_openapi_metadata_populated(tmp_path: Path) -> None:
     tag_names = {t["name"] for t in schema.get("tags", [])}
     expected = {
         "health", "sessions", "policy", "approvals", "notifications",
-        "search", "projects", "files", "local-dir", "streams",
+        "search", "projects", "files", "local-dir", "streams", "skills",
     }
     assert tag_names == expected, f"missing or extra tags: {tag_names ^ expected}"
 

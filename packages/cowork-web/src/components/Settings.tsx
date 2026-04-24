@@ -15,7 +15,7 @@
  * + custom event for live updates).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CoworkClient } from "../transport/client";
 import type { HealthInfo, PolicyMode, PythonExecPolicy } from "../transport/types";
 import { usePreferences } from "../preferences";
@@ -455,13 +455,48 @@ function SecTools({
 }) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [installBusy, setInstallBusy] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  const refreshHealth = () => {
     client
       .health()
       .then(setHealth)
       .catch((e) => setError(String(e)));
+  };
+
+  useEffect(() => {
+    refreshHealth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
+
+  const onInstallPicked = async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    setInstallBusy(true);
+    setInstallError(null);
+    try {
+      await client.installSkill(files[0], files[0].name);
+      refreshHealth();
+    } catch (e) {
+      setInstallError(String(e));
+    } finally {
+      setInstallBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const onUninstallClick = async (name: string) => {
+    if (!window.confirm(`Uninstall skill "${name}"? The folder and all its files will be removed.`)) {
+      return;
+    }
+    try {
+      await client.uninstallSkill(name);
+      refreshHealth();
+    } catch (e) {
+      setInstallError(String(e));
+    }
+  };
 
   const visibleTools = (health?.tools ?? []).filter(
     (t) => !(surface === "local" && LOCAL_MODE_HIDDEN_TOOLS.has(t)),
@@ -495,34 +530,119 @@ function SecTools({
           <AgentStack agents={["researcher", "writer", "analyst", "reviewer"]} size={16} />
         </Field>
       ))}
-      <h3 style={{ marginTop: 24 }}>Skills</h3>
-      <div className="desc">
-        Skill packs the server discovered at startup. The agent sees
-        the name + description in its prompt registry and calls
-        <code style={{ margin: "0 4px" }}>load_skill(name)</code>
-        to pull the body into context.
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 12,
+          marginTop: 24,
+        }}
+      >
+        <h3 style={{ margin: 0, flex: 1 }}>Skills</h3>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".zip,application/zip"
+          style={{ display: "none" }}
+          onChange={(e) => void onInstallPicked(e.target.files)}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={installBusy}
+          style={{
+            fontFamily: "var(--mono)",
+            fontSize: 11,
+            padding: "3px 10px",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--line)",
+            background: "var(--paper)",
+            color: installBusy ? "var(--ink-4)" : "var(--ink-2)",
+            cursor: installBusy ? "wait" : "pointer",
+          }}
+          title="Install a skill from a .zip archive"
+        >
+          {installBusy ? "installing…" : "+ install (.zip)"}
+        </button>
       </div>
+      <div className="desc">
+        Skill packs the agent can load on demand. The agent sees
+        name + description in its prompt registry and calls
+        <code style={{ margin: "0 4px" }}>load_skill(name)</code>
+        to pull the body into context. Bundled skills ship with
+        Cowork; user-installed skills live under
+        <code style={{ margin: "0 4px" }}>&lt;workspace&gt;/global/skills/</code>.
+      </div>
+      {installError && (
+        <div
+          style={{
+            fontSize: "var(--fs-xs)",
+            color: "var(--danger)",
+            marginBottom: 8,
+          }}
+        >
+          {installError}
+        </div>
+      )}
       {(health?.skills ?? []).length === 0 ? (
         <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>No skills installed.</div>
       ) : (
-        (health?.skills ?? []).map((s) => (
-          <Field
-            key={s.name}
-            label={
-              <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
-                {s.name}
-              </span>
-            }
-            sub={s.description}
-          >
-            <span
-              style={{ color: "var(--ink-4)", fontSize: "var(--fs-xs)", fontFamily: "var(--mono)" }}
-              title="Skill license"
+        (health?.skills ?? []).map((s) => {
+          const removable = s.source === "user";
+          return (
+            <Field
+              key={s.name}
+              label={
+                <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
+                  {s.name}
+                </span>
+              }
+              sub={s.description}
             >
-              {s.license}
-            </span>
-          </Field>
-        ))
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span
+                  style={{
+                    color: "var(--ink-4)",
+                    fontSize: "var(--fs-xs)",
+                    fontFamily: "var(--mono)",
+                  }}
+                  title={`Skill license · source: ${s.source}`}
+                >
+                  {s.license}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removable && void onUninstallClick(s.name)}
+                  disabled={!removable}
+                  title={
+                    removable
+                      ? "Uninstall"
+                      : `Bundled skill — cannot uninstall (source: ${s.source})`
+                  }
+                  style={{
+                    width: 20,
+                    height: 20,
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 13,
+                    color: removable ? "var(--ink-3)" : "var(--ink-4)",
+                    opacity: removable ? 1 : 0.4,
+                    cursor: removable ? "pointer" : "not-allowed",
+                    background: "transparent",
+                  }}
+                >
+                  {removable ? "×" : "🔒"}
+                </button>
+              </span>
+            </Field>
+          );
+        })
       )}
     </div>
   );
