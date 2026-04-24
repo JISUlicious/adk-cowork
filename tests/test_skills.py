@@ -156,3 +156,68 @@ def test_skill_is_frozen_dataclass() -> None:
     )
     with pytest.raises(Exception):  # noqa: B017
         s.name = "y"  # type: ignore[misc]
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.asyncio
+async def test_runtime_picks_up_project_skills(tmp_path: Path) -> None:
+    """Spec §2.5.1 — project-scoped skills shadow global ones at the
+    runtime layer, not just in the raw registry. This pins the
+    ``_build_context`` scan so the project/skills/ path stays wired."""
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import build_runtime
+    from cowork_core.tools.base import COWORK_CONTEXT_KEY, CoworkToolContext
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+
+    # Seed a project-scoped skill: projects/<slug>/skills/custom/SKILL.md.
+    project = runtime.registry_for("local").create("Echo")
+    _make_skill(project.skills_dir, "custom", "custom body from project")
+
+    # Open a session — this triggers _build_context and writes the
+    # CoworkToolContext into ADK state under COWORK_CONTEXT_KEY.
+    _, _, adk_sid = await runtime.open_session(
+        user_id="local", project_name="Echo",
+    )
+    sess = await runtime.runner.session_service.get_session(
+        app_name="cowork", user_id="local", session_id=adk_sid,
+    )
+    assert sess is not None
+    ctx = sess.state[COWORK_CONTEXT_KEY]
+    assert isinstance(ctx, CoworkToolContext)
+    # Registry in the session context carries the project-scoped skill.
+    names = ctx.skills.names()
+    assert "custom" in names, f"expected 'custom' in {names}"
+    assert ctx.skills.get("custom").load_body().strip() == "custom body from project"
+
+
+@_pytest.mark.asyncio
+async def test_runtime_project_skill_shadows_global(tmp_path: Path) -> None:
+    """Bundled ``docx-basic`` ships under cowork-core; a project's own
+    ``docx-basic/SKILL.md`` must override it in that session's
+    registry (spec: project-scoped shadows global)."""
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import build_runtime
+    from cowork_core.tools.base import COWORK_CONTEXT_KEY
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+
+    # Global registry already has bundled docx-basic.
+    assert "docx-basic" in runtime.skills.names()
+
+    project = runtime.registry_for("local").create("Foxtrot")
+    _make_skill(project.skills_dir, "docx-basic", "overridden in project")
+
+    _, _, adk_sid = await runtime.open_session(
+        user_id="local", project_name="Foxtrot",
+    )
+    sess = await runtime.runner.session_service.get_session(
+        app_name="cowork", user_id="local", session_id=adk_sid,
+    )
+    ctx = sess.state[COWORK_CONTEXT_KEY]
+    body = ctx.skills.get("docx-basic").load_body()
+    assert "overridden in project" in body

@@ -191,7 +191,14 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             # config reload.
             "model": cfg.model.model,
             "tools": runtime.tools.names(),
-            "skills": runtime.skills.names(),
+            "skills": [
+                {
+                    "name": s.name,
+                    "description": s.description,
+                    "license": s.license,
+                }
+                for s in runtime.skills.all_skills()
+            ],
             "compaction": {
                 "enabled": cfg.compaction.enabled,
                 "compaction_interval": cfg.compaction.compaction_interval,

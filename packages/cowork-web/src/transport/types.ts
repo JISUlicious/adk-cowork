@@ -81,13 +81,21 @@ export interface CompactionSettings {
   event_retention_size: number;
 }
 
+/** One entry in the health payload's ``skills`` list. Mirrors
+ *  ``cowork_server.api_models.SkillInfo`` server-side. */
+export interface SkillInfo {
+  name: string;
+  description: string;
+  license: string;
+}
+
 export interface HealthInfo {
   status: string;
   /** Active LLM model identifier from ``[model] model`` in cowork.toml.
    *  Surfaced read-only in Settings → System. */
   model?: string;
   tools: string[];
-  skills: string[];
+  skills: SkillInfo[];
   compaction?: CompactionSettings;
 }
 

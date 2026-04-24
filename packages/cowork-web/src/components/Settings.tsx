@@ -496,13 +496,31 @@ function SecTools({
         </Field>
       ))}
       <h3 style={{ marginTop: 24 }}>Skills</h3>
-      <div className="desc">Skill packs the server discovered at startup.</div>
+      <div className="desc">
+        Skill packs the server discovered at startup. The agent sees
+        the name + description in its prompt registry and calls
+        <code style={{ margin: "0 4px" }}>load_skill(name)</code>
+        to pull the body into context.
+      </div>
       {(health?.skills ?? []).length === 0 ? (
         <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>No skills installed.</div>
       ) : (
         (health?.skills ?? []).map((s) => (
-          <Field key={s} label={<span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>{s}</span>}>
-            <span style={{ color: "var(--ok)", fontSize: "var(--fs-xs)" }}>● installed</span>
+          <Field
+            key={s.name}
+            label={
+              <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
+                {s.name}
+              </span>
+            }
+            sub={s.description}
+          >
+            <span
+              style={{ color: "var(--ink-4)", fontSize: "var(--fs-xs)", fontFamily: "var(--mono)" }}
+              title="Skill license"
+            >
+              {s.license}
+            </span>
           </Field>
         ))
       )}

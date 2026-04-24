@@ -129,12 +129,24 @@ class CoworkRuntime:
         ``workdir`` is set for local-dir (desktop) sessions; the env is a
         ``LocalDirExecEnv`` rooted at that path. Otherwise a ``ManagedExecEnv``
         bound to (project, session) gives the classic two-namespace view.
+
+        The session's skill registry starts from the global skills scanned
+        at ``build_runtime`` and then layers on per-scope overrides:
+
+        * **Managed mode** — scan ``<project_root>/skills/`` so a project
+          can ship a custom skill that shadows a global one of the same
+          name (spec-canonical path, ``Project.skills_dir``).
+        * **Local-dir mode** — no managed project root exists; we fall
+          back to ``<workdir>/.cowork/skills/`` so desktop users keep a
+          way to drop per-workdir overrides alongside the session-state
+          bookkeeping.
         """
         session_skills = SkillRegistry(_skills=dict(self.skills._skills))
-        session_skills.scan(self.workspace.root / ".cowork" / "skills")
         if workdir is not None:
+            session_skills.scan(workdir / ".cowork" / "skills")
             env: Any = LocalDirExecEnv(workdir=workdir, session_id=session.id)
         else:
+            session_skills.scan(project.skills_dir)
             env = ManagedExecEnv(project=project, session=session)
         return CoworkToolContext(
             workspace=self.workspace_for(user_id),

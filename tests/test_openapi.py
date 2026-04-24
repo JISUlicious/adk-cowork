@@ -109,6 +109,27 @@ def test_request_bodies_have_named_schemas(tmp_path: Path) -> None:
         assert expected in components, f"missing schema: {expected}"
 
 
+def test_health_exposes_skill_info_components(tmp_path: Path) -> None:
+    """Slice A T2 — /v1/health.skills is now a list of SkillInfo
+    objects carrying name + description + license, not bare
+    strings. The Settings → Skills UI depends on this shape."""
+    schema = _client(tmp_path).get("/openapi.json").json()
+    components = schema.get("components", {}).get("schemas", {})
+    assert "SkillInfo" in components, "SkillInfo schema missing"
+    skill_info = components["SkillInfo"]
+    props = skill_info.get("properties", {})
+    for required in ("name", "description", "license"):
+        assert required in props, f"SkillInfo.{required} missing"
+    # HealthResponse.skills must reference SkillInfo (either
+    # inline $ref or through an array.items $ref).
+    health = components["HealthResponse"]["properties"]["skills"]
+    items = health.get("items", {})
+    # Pydantic v2 emits the ref inside items.$ref for array types.
+    assert items.get("$ref", "").endswith("SkillInfo"), (
+        f"HealthResponse.skills.items did not $ref SkillInfo: {items}"
+    )
+
+
 def test_policy_responses_use_literal_unions(tmp_path: Path) -> None:
     """Policy mode + python_exec endpoints must enumerate their valid
     values in the schema so Swagger renders an enum dropdown."""

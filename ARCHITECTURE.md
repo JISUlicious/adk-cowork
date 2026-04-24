@@ -56,7 +56,15 @@ Settings reads `GET /v1/health` for its read-only System /
 Agents-and-tools panes. The health payload carries the active LLM
 model identifier (`cfg.model.model` from `cowork.toml`) under the
 `model` field so the Settings → System pane can surface what the
-agent is running against without a separate route.
+agent is running against without a separate route. The `skills`
+field is a list of `{name, description, license}` records so the
+Settings → Skills list shows what each skill does, not just its
+name. Skill discovery runs at three scopes — bundled (shipped
+with `cowork-core`), user-global (`~/.config/cowork/skills/`),
+and per-session (`<project>/skills/` in managed mode or
+`<workdir>/.cowork/skills/` in local-dir mode); the project /
+workdir scan happens inside `_build_context` so a project's skill
+shadows a global one of the same name for that session only.
 
 The same pane → routes mapping is auto-published as an OpenAPI
 schema at `/openapi.json` (Swagger UI at `/docs`, ReDoc at

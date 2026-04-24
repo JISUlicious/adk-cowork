@@ -29,6 +29,20 @@ class CompactionInfo(BaseModel):
     event_retention_size: int
 
 
+class SkillInfo(BaseModel):
+    """One entry in the health payload's ``skills`` list.
+
+    Mirrors ``cowork_core.skills.Skill`` — ``name`` + ``description``
+    match what the root agent's prompt registry shows; ``license``
+    lets the UI surface Cowork's MIT default vs. user-installed
+    third-party skills at a glance.
+    """
+
+    name: str
+    description: str
+    license: str
+
+
 class HealthResponse(BaseModel):
     status: str
     backend: str
@@ -36,7 +50,7 @@ class HealthResponse(BaseModel):
     components: dict[str, str]
     model: str | None = None
     tools: list[str] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
+    skills: list[SkillInfo] = Field(default_factory=list)
     compaction: CompactionInfo | None = None
 
 
@@ -290,7 +304,7 @@ class PatchLocalSessionRequest(BaseModel):
 
 __all__ = [
     # health
-    "CompactionInfo", "HealthResponse",
+    "CompactionInfo", "HealthResponse", "SkillInfo",
     # projects
     "ProjectInfo", "CreateProjectRequest", "DeleteResponse",
     # sessions
