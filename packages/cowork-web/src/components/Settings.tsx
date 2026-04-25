@@ -808,6 +808,41 @@ function SecSystem({ client }: { client: CoworkClient }) {
           {health?.skills?.length ?? "—"}
         </span>
       </Field>
+      <Field
+        label="MCP servers"
+        sub="Configured Model Context Protocol servers. ✓ healthy / ✗ failed; hover an error pill for the detail."
+      >
+        {(() => {
+          const mcp = health?.mcp ?? [];
+          if (mcp.length === 0) {
+            return (
+              <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)", color: "var(--ink-4)" }}>
+                none configured
+              </span>
+            );
+          }
+          const ok = mcp.filter((m) => m.status === "ok").length;
+          const err = mcp.length - ok;
+          return (
+            <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+              <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)", color: "var(--ok)" }}>
+                ● {ok} ok
+              </span>
+              {err > 0 && (
+                <span
+                  style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)", color: "var(--danger)" }}
+                  title={mcp
+                    .filter((m) => m.status === "error")
+                    .map((m) => `${m.name}: ${m.last_error ?? "error"}`)
+                    .join("\n")}
+                >
+                  ✗ {err} error
+                </span>
+              )}
+            </span>
+          );
+        })()}
+      </Field>
       <Field label="Backends">
         <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
           local in-memory (event bus · limiter · sessions)

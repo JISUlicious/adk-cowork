@@ -97,6 +97,18 @@ export interface SkillInfo {
   content_hash?: string;
 }
 
+/** Per-MCP-server health entry. Mirrors
+ *  ``cowork_server.api_models.MCPServerStatusInfo`` server-side.
+ *  ``status === "error"`` carries a non-null ``last_error`` with
+ *  the failure detail Settings shows inline. */
+export interface MCPServerStatusInfo {
+  name: string;
+  status: "ok" | "error";
+  last_error: string | null;
+  tool_count: number | null;
+  transport: "stdio" | "sse" | "http";
+}
+
 export interface HealthInfo {
   status: string;
   /** Active LLM model identifier from ``[model] model`` in cowork.toml.
@@ -104,6 +116,7 @@ export interface HealthInfo {
   model?: string;
   tools: string[];
   skills: SkillInfo[];
+  mcp?: MCPServerStatusInfo[];
   compaction?: CompactionSettings;
 }
 

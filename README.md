@@ -232,6 +232,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Settings → Skills (name + description + license) | Settings | wired | Slice A T2 |
 | Skills: install / uninstall UX (.zip) | Settings | wired | Slice B |
 | Skills: version + triggers + content_hash + validate route | Server / Settings | wired | Slice I |
+| MCP: stdio + sse + http transports + tool_filter + per-server status | Core / Settings | wired | Slice III |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

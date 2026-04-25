@@ -130,6 +130,28 @@ def test_health_exposes_skill_info_components(tmp_path: Path) -> None:
     )
 
 
+def test_health_exposes_mcp_status_components(tmp_path: Path) -> None:
+    """Slice III — /v1/health.mcp is a list of MCPServerStatusInfo
+    objects (name, status, last_error, tool_count, transport).
+    Settings → System renders the green/red counts from this."""
+    schema = _client(tmp_path).get("/openapi.json").json()
+    components = schema.get("components", {}).get("schemas", {})
+    assert "MCPServerStatusInfo" in components, "MCPServerStatusInfo schema missing"
+    info = components["MCPServerStatusInfo"]
+    props = info.get("properties", {})
+    for required in ("name", "status", "transport"):
+        assert required in props, f"MCPServerStatusInfo.{required} missing"
+    # ``status`` is a Literal["ok", "error"] → enum on the schema.
+    assert set(props["status"].get("enum", [])) == {"ok", "error"}
+    # HealthResponse.mcp must reference MCPServerStatusInfo via
+    # array.items.$ref.
+    mcp = components["HealthResponse"]["properties"]["mcp"]
+    items = mcp.get("items", {})
+    assert items.get("$ref", "").endswith("MCPServerStatusInfo"), (
+        f"HealthResponse.mcp.items did not $ref MCPServerStatusInfo: {items}"
+    )
+
+
 def test_policy_responses_use_literal_unions(tmp_path: Path) -> None:
     """Policy mode + python_exec endpoints must enumerate their valid
     values in the schema so Swagger renders an enum dropdown."""

@@ -88,6 +88,22 @@ agent's prompt registry line is re-read from
 static string) so newly-installed skills appear in the next
 turn's prompt without a process restart.
 
+**MCP servers.** Configured under `[[mcp_servers]]` in
+`cowork.toml`; each entry has a `transport` (`stdio` /
+`sse` / `http`), connection details (`command + args + env`
+for stdio, `url + headers` for sse + http), an optional
+`tool_filter` to whitelist specific tool names, and a
+`description`. `build_runtime` constructs each toolset via
+`build_mcp_toolset(cfg)` which dispatches on transport and
+returns `(toolset, last_error)`. Per-server outcome lands on
+`CoworkRuntime.mcp_status: dict[name, MCPServerStatus]` — exposed
+via `/v1/health.mcp` so Settings → System can show green/red
+counts and surface `last_error` on hover. The previously-silent
+failure path now produces a structured error message.
+Hot-swapping mid-process is **not** supported in v1; changes to
+`cowork.toml` or to a future `<workspace>/global/mcp/servers.json`
+take effect on the next runner start (see Slice IV plan).
+
 The same pane → routes mapping is auto-published as an OpenAPI
 schema at `/openapi.json` (Swagger UI at `/docs`, ReDoc at
 `/redoc`). Routes are tagged into the ten groups above; auth uses

@@ -14,13 +14,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from google.adk.apps.app import App, EventsCompactionConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.runners import Runner
 
-from cowork_core.agents.root_agent import build_root_agent
+from cowork_core.agents.root_agent import build_mcp_toolset, build_root_agent
 from cowork_core.model.openai_compat import build_model
 from cowork_core.approvals import (
     ApprovalStore,
@@ -72,6 +72,25 @@ class SkillInstallError(Exception):
     with the exception message as the detail."""
 
 
+@dataclass
+class MCPServerStatus:
+    """One entry in ``CoworkRuntime.mcp_status``.
+
+    Populated when ``build_runtime`` constructs MCP toolsets — one
+    per declared server. Exposed via ``/v1/health`` so Settings can
+    show a green pill for `ok` servers and surface ``last_error``
+    for `error` ones. ``tool_count`` stays ``None`` at startup
+    (ADK's ``MCPToolset`` lazy-loads tools); Slice IV's add-server
+    dry-run flow populates it on demand.
+    """
+
+    name: str
+    status: Literal["ok", "error"]
+    last_error: str | None = None
+    tool_count: int | None = None
+    transport: Literal["stdio", "sse", "http"] = "stdio"
+
+
 def _validate_skill_name(name: str) -> None:
     if not _SKILL_NAME_PATTERN.match(name):
         raise SkillInstallError(
@@ -104,6 +123,10 @@ class CoworkRuntime:
     notifications: NotificationStore = field(
         default_factory=InMemoryNotificationStore,
     )
+    # Per-MCP-server status captured at startup. Surfaced via
+    # ``/v1/health.mcp`` so Settings can show whether a configured
+    # server actually built successfully.
+    mcp_status: dict[str, MCPServerStatus] = field(default_factory=dict)
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -946,9 +969,29 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     register_email_tools(tool_registry)
     register_skill_tools(tool_registry)
 
+    # Mount configured MCP servers as toolsets, recording per-server
+    # status so /v1/health and Settings can surface failures rather
+    # than silently dropping a misconfigured server.
+    agent_tools: list[Any] = list(tool_registry.as_list())
+    mcp_status: dict[str, MCPServerStatus] = {}
+    for name, mcp_cfg in cfg.mcp_servers.items():
+        toolset, error = build_mcp_toolset(mcp_cfg)
+        if toolset is not None:
+            agent_tools.append(toolset)
+            mcp_status[name] = MCPServerStatus(
+                name=name, status="ok", transport=mcp_cfg.transport,
+            )
+        else:
+            mcp_status[name] = MCPServerStatus(
+                name=name,
+                status="error",
+                last_error=error,
+                transport=mcp_cfg.transport,
+            )
+
     agent = build_root_agent(
         cfg,
-        tools=tool_registry.as_list(),
+        tools=agent_tools,
         # Pass the live registry so mid-process reloads (via
         # ``reload_skills()``) land in existing sessions' next turn.
         # ``skills_snippet`` is still the fallback for tests that
@@ -997,6 +1040,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         skills=skills,
         tools=tool_registry,
         runner=runner,
+        mcp_status=mcp_status,
     )
 
 

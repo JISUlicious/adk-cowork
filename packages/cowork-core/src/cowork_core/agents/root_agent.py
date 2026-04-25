@@ -112,25 +112,77 @@ operation allowed in plan mode.
 """
 
 
-def _build_mcp_toolset(mcp_cfg: McpServerConfig) -> Any | None:
-    """Create an MCPToolset from config, or None if misconfigured."""
-    if not mcp_cfg.command:
-        return None
-    try:
-        from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
-        from mcp.client.stdio import StdioServerParameters
+def build_mcp_toolset(mcp_cfg: McpServerConfig) -> tuple[Any | None, str | None]:
+    """Construct an ADK ``MCPToolset`` for ``mcp_cfg`` and return
+    ``(toolset, last_error)``. Either field may be ``None``: a
+    successful build returns ``(toolset, None)``, a misconfigured
+    or exception-throwing build returns ``(None, "<error>")``.
 
-        return MCPToolset(
-            connection_params=StdioConnectionParams(
+    Slice III replaces the older silent-failure ``_build_mcp_toolset``
+    so callers can populate ``CoworkRuntime.mcp_status`` and surface
+    the error to Settings → System.
+
+    Dispatches on ``transport``:
+    - ``stdio`` (default): subprocess launched from ``command`` +
+      ``args`` + ``env``.
+    - ``sse``: Server-Sent Events to ``url`` with ``headers``.
+    - ``http``: Streamable HTTP to ``url`` with ``headers``.
+
+    ``tool_filter`` is passed through to ``MCPToolset`` so the agent
+    only sees the whitelisted tools when the user has narrowed the
+    surface.
+    """
+    try:
+        # ``McpToolset`` (lowercase ``Mcp``) is the current ADK class
+        # name; ``MCPToolset`` is a deprecated alias retained for
+        # backwards compatibility. Use the fresh name to silence the
+        # deprecation warning.
+        from google.adk.tools.mcp_tool import (
+            McpToolset,
+            SseConnectionParams,
+            StdioConnectionParams,
+            StreamableHTTPConnectionParams,
+        )
+    except ImportError as exc:  # pragma: no cover — adk extra missing
+        return None, f"google-adk MCP support unavailable: {exc}"
+
+    try:
+        if mcp_cfg.transport == "stdio":
+            if not mcp_cfg.command:
+                return None, "stdio transport requires 'command'"
+            from mcp.client.stdio import StdioServerParameters
+
+            params: Any = StdioConnectionParams(
                 server_params=StdioServerParameters(
                     command=mcp_cfg.command,
                     args=mcp_cfg.args,
                     env=mcp_cfg.env or None,
                 ),
-            ),
+            )
+        elif mcp_cfg.transport == "sse":
+            if not mcp_cfg.url:
+                return None, "sse transport requires 'url'"
+            params = SseConnectionParams(
+                url=mcp_cfg.url,
+                headers=mcp_cfg.headers or None,
+            )
+        elif mcp_cfg.transport == "http":
+            if not mcp_cfg.url:
+                return None, "http transport requires 'url'"
+            params = StreamableHTTPConnectionParams(
+                url=mcp_cfg.url,
+                headers=mcp_cfg.headers or None,
+            )
+        else:  # pragma: no cover — Pydantic Literal blocks this
+            return None, f"unknown transport: {mcp_cfg.transport!r}"
+
+        toolset = McpToolset(
+            connection_params=params,
+            tool_filter=mcp_cfg.tool_filter,
         )
-    except Exception:
-        return None
+        return toolset, None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 def _compose_instruction(
@@ -222,13 +274,11 @@ def build_root_agent(
         )
 
     model = build_model(cfg.model)
+    # MCP toolsets are appended to ``tools`` by ``build_runtime``
+    # before this function is called, so per-server status can live on
+    # ``CoworkRuntime.mcp_status``. ``build_root_agent`` itself stays
+    # MCP-config-agnostic.
     adk_tools: list[Any] = list(tools or [])
-
-    # Mount MCP servers as toolsets
-    for _name, mcp_cfg in cfg.mcp_servers.items():
-        toolset = _build_mcp_toolset(mcp_cfg)
-        if toolset:
-            adk_tools.append(toolset)
 
     # Policy + audit + model callbacks — applied to every agent (root +
     # sub-agents) so plan-mode enforcement, audit logging, and turn-budget

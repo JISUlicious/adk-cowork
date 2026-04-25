@@ -70,6 +70,24 @@ class DeleteSkillResult(BaseModel):
     status: str  # always ``"deleted"`` for now
 
 
+class MCPServerStatusInfo(BaseModel):
+    """Per-MCP-server health entry surfaced in ``/v1/health.mcp``.
+
+    Mirrors ``cowork_core.runner.MCPServerStatus``. ``status`` is
+    one of ``"ok"`` / ``"error"``; ``last_error`` carries the
+    string detail when the server failed to build (Settings
+    surfaces it inline). ``tool_count`` stays ``None`` at startup
+    — ADK's ``MCPToolset`` lazy-loads tools, and Slice IV's
+    add-server flow does dry-run discovery to fill it.
+    """
+
+    name: str
+    status: Literal["ok", "error"]
+    last_error: str | None = None
+    tool_count: int | None = None
+    transport: Literal["stdio", "sse", "http"] = "stdio"
+
+
 class HealthResponse(BaseModel):
     status: str
     backend: str
@@ -78,6 +96,7 @@ class HealthResponse(BaseModel):
     model: str | None = None
     tools: list[str] = Field(default_factory=list)
     skills: list[SkillInfo] = Field(default_factory=list)
+    mcp: list[MCPServerStatusInfo] = Field(default_factory=list)
     compaction: CompactionInfo | None = None
 
 
@@ -330,8 +349,8 @@ class PatchLocalSessionRequest(BaseModel):
 
 
 __all__ = [
-    # health + skills
-    "CompactionInfo", "HealthResponse", "SkillInfo",
+    # health + skills + mcp
+    "CompactionInfo", "HealthResponse", "MCPServerStatusInfo", "SkillInfo",
     "InstallSkillResult", "ValidateSkillResult", "DeleteSkillResult",
     # projects
     "ProjectInfo", "CreateProjectRequest", "DeleteResponse",

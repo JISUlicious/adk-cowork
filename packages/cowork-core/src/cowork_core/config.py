@@ -69,10 +69,34 @@ class RuntimeConfig(BaseModel):
 
 
 class McpServerConfig(BaseModel):
-    """Configuration for a single MCP server."""
+    """Configuration for a single MCP server.
+
+    ``transport`` selects the wire protocol — ``stdio`` (default, runs
+    a local subprocess), ``sse`` (Server-Sent Events), or ``http``
+    (Streamable HTTP). ``command`` / ``args`` / ``env`` apply to
+    stdio; ``url`` / ``headers`` apply to sse + http. ``tool_filter``
+    optionally restricts which tools the server exposes to the agent
+    (None = all tools). ``description`` is a free-form string
+    surfaced in Settings.
+
+    ``bundled`` distinguishes server entries shipped with the
+    package (immutable, cannot be deleted via ``DELETE
+    /v1/mcp/servers/{name}``) from user-added entries that live in
+    ``<workspace>/global/mcp/servers.json``.
+    """
+
+    # stdio transport
     command: str = ""
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
+    # sse / http transport
+    transport: Literal["stdio", "sse", "http"] = "stdio"
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    # cross-cutting
+    tool_filter: list[str] | None = None
+    description: str = ""
+    bundled: bool = False
 
 
 class EmailConfig(BaseModel):

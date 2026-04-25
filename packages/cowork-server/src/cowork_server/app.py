@@ -207,6 +207,16 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 }
                 for s in runtime.skills.all_skills()
             ],
+            "mcp": [
+                {
+                    "name": st.name,
+                    "status": st.status,
+                    "last_error": st.last_error,
+                    "tool_count": st.tool_count,
+                    "transport": st.transport,
+                }
+                for st in runtime.mcp_status.values()
+            ],
             "compaction": {
                 "enabled": cfg.compaction.enabled,
                 "compaction_interval": cfg.compaction.compaction_interval,
