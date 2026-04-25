@@ -275,3 +275,11 @@ Slice VI — per-session MCP server gating (this commit):
 - update tests/test_mcp.py — convert test_restart_rebuilds_status to async; add 2 new tests (callback gating logic, session state round-trip + validation); 14 total in test_mcp.py, 236 overall
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
+
+### M5 verification — email send end-to-end (2026-04-25)
+
+- fix permission callback for `email_send` — was reading `to`/`subject`/`body` from args (which only contain `eml_id` + `confirmed`), producing a "Send email to None" prompt; the tool body already returns a properly formatted `confirmation_required` from the .eml file, so the callback now passes through on first call and only enforces the approval token on `confirmed=True` (model can't bypass consent by flipping the flag)
+- update tests/test_policy.py — replace the now-obsolete `test_email_send_requires_confirmation_by_default` with three tests covering the new flow: pass-through on first call, block on `confirmed=True` without approval, consume-and-pass on `confirmed=True` with a granted approval (one-shot)
+- add tests/test_email.py end-to-end SMTP coverage — three new tests monkey-patching `smtplib.SMTP` to verify (1) TLS + auth path (`starttls` + `login` + `sendmail` + `quit` in order), (2) plain-relay path (no `starttls` / no `login`), (3) connection failure surfaces as `{"error": ...}` rather than propagating; 11 total in test_email.py, 241 overall (was 236)
+- tick SPEC.md §2.13 M5 — note the two-layer confirm gate, the `smtplib`-monkey-patched test approach, and that "Gmail via MCP" is now satisfied by `docs/MCP.md`'s server-preset add-flow rather than a Cowork-specific GMail integration (cull-audit decision: stay neutral on which MCP server users pick)
+- update README.md — new feature row "Email: end-to-end SMTP send with two-layer confirm gate"

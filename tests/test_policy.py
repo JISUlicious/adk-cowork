@@ -90,19 +90,75 @@ class TestWorkMode:
         assert result is not None
         assert "error" in result
 
-    def test_email_send_requires_confirmation_by_default(
+    def test_email_send_passes_through_first_call(
         self, work_policy: PolicyConfig,
     ) -> None:
+        """First call (``confirmed=False``) passes through the callback
+        so the tool body can read the .eml and return a properly
+        formatted ``confirmation_required`` dict. The callback only
+        enforces the approval token on ``confirmed=True``."""
         cb = make_permission_callback(work_policy)
         ctx = _ctx()
         result = cb(
             _make_tool("email_send"),
-            {"to": "x@example.com", "subject": "hi", "body": "hello"},
+            {"eml_id": "abc"},  # confirmed missing → tool gates itself
+            ctx,
+        )
+        assert result is None
+
+    def test_email_send_blocks_confirmed_without_approval(
+        self, work_policy: PolicyConfig,
+    ) -> None:
+        """Model can't bypass user consent by setting ``confirmed=True``
+        directly — without an approval token on file, the callback
+        returns an explanatory error."""
+        cb = make_permission_callback(work_policy)
+        ctx = _ctx()
+        result = cb(
+            _make_tool("email_send"),
+            {"eml_id": "abc", "confirmed": True},
             ctx,
         )
         assert result is not None
-        assert result["confirmation_required"] is True
-        assert result["to"] == "x@example.com"
+        assert "error" in result
+        assert "approval" in result["error"].lower()
+
+    def test_email_send_consumes_approval_on_confirmed(
+        self, work_policy: PolicyConfig,
+    ) -> None:
+        """When the user has granted approval via the UI, the callback
+        consumes the token and lets the tool body run with ``confirmed=True``.
+        A follow-up ``confirmed=True`` call without re-granting blocks
+        again — the approval is one-shot."""
+        from cowork_core.approvals import InMemoryApprovalStore
+        from cowork_core.tools.base import COWORK_CONTEXT_KEY
+
+        store = InMemoryApprovalStore()
+        fake_session = MagicMock()
+        fake_session.id = "sess-1"
+        fake_cowork_ctx = MagicMock()
+        fake_cowork_ctx.session = fake_session
+        fake_cowork_ctx.approvals = store
+
+        cb = make_permission_callback(work_policy)
+        ctx = _ctx()
+        ctx.state[COWORK_CONTEXT_KEY] = fake_cowork_ctx
+
+        store.grant("sess-1", "email_send")
+
+        first = cb(
+            _make_tool("email_send"),
+            {"eml_id": "abc", "confirmed": True},
+            ctx,
+        )
+        assert first is None
+
+        second = cb(
+            _make_tool("email_send"),
+            {"eml_id": "abc", "confirmed": True},
+            ctx,
+        )
+        assert second is not None and "error" in second
 
     def test_python_exec_requires_confirmation_by_default(
         self, work_policy: PolicyConfig,

@@ -141,27 +141,31 @@ def make_permission_callback(
                         code_preview=code_preview,
                     )
                 # python_exec == "allow" → pass through
-            # email_send: "confirm" surfaces a UI prompt; "deny" hard-blocks.
+            # email_send: "deny" hard-blocks regardless of args; "confirm"
+            # only enforces the approval token when the agent claims it is
+            # already confirmed (``confirmed=True``). On the first call
+            # (``confirmed=False``) the tool body itself returns a nicely
+            # formatted ``confirmation_required`` dict — it has the .eml
+            # file and can read the actual recipient / subject / body
+            # preview, which the callback cannot. Layering the tool's own
+            # prompt over the callback's gate avoids the previous "Send
+            # email to None" bug while keeping ``confirmed=True`` from
+            # bypassing user consent (the model could lie about the flag).
             if name == "email_send":
                 if policy.email_send == "deny":
                     return {
                         "error": "Blocked by policy: email sending is disabled.",
                     }
-                if policy.email_send == "confirm":
-                    if _consume_approval(tool_context, name):
-                        return None
-                    to = args.get("to")
-                    subject = args.get("subject")
-                    body = args.get("body") or ""
-                    body_preview = body if len(body) <= 400 else body[:400] + "…"
-                    return _confirmation(
-                        name,
-                        summary=f"Send email to {to} — subject: {subject!r}",
-                        to=to,
-                        cc=args.get("cc"),
-                        subject=subject,
-                        body_preview=body_preview,
-                    )
+                if policy.email_send == "confirm" and args.get("confirmed") is True:
+                    if not _consume_approval(tool_context, name):
+                        return {
+                            "error": (
+                                "email_send called with confirmed=True but "
+                                "no user approval is on file. Re-call with "
+                                "confirmed=False to request the user's "
+                                "approval first."
+                            ),
+                        }
 
         # auto mode: no additional gates beyond tool-level checks
         return None

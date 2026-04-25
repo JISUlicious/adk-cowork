@@ -139,3 +139,218 @@ class TestEmailSend:
         result = email_send(eml_id="nonexistent", tool_context=tctx)
         assert "error" in result
         assert "not found" in str(result["error"])
+
+
+class TestEmailSendEndToEnd:
+    """End-to-end SMTP happy path. Monkey-patches ``smtplib.SMTP`` to
+    capture ``starttls`` / ``login`` / ``sendmail`` calls without
+    spinning up a real SMTP server — this verifies the wire shape
+    Cowork sends without making the test depend on aiosmtpd or a
+    flaky network listener."""
+
+    def test_smtp_send_with_credentials_and_tls(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Build a context with SMTP fully configured.
+        ws = Workspace(root=tmp_path)
+        reg = ProjectRegistry(workspace=ws)
+        project = reg.create("EmailSendE2E")
+        session = reg.new_session("emailsendE2E")
+        cfg = CoworkConfig(
+            email=EmailConfig(
+                default_from="me@cowork.local",
+                smtp_host="smtp.example.com",
+                smtp_port=587,
+                smtp_user="me@cowork.local",
+                smtp_password="hunter2",
+                use_tls=True,
+            ),
+        )
+        ctx = CoworkToolContext(
+            workspace=ws,
+            registry=reg,
+            project=project,
+            session=session,
+            config=cfg,
+            skills=SkillRegistry(),
+            env=ManagedExecEnv(project=project, session=session),
+            approvals=InMemoryApprovalStore(),
+        )
+        fake = MagicMock()
+        fake.state = {COWORK_CONTEXT_KEY: ctx}
+
+        # Capture SMTP calls.
+        recorded: dict[str, object] = {}
+
+        class FakeSMTP:
+            def __init__(self, host: str, port: int) -> None:
+                recorded["host"] = host
+                recorded["port"] = port
+
+            def starttls(self) -> None:
+                recorded["starttls"] = True
+
+            def login(self, user: str, password: str) -> None:
+                recorded["user"] = user
+                recorded["password"] = password
+
+            def sendmail(self, from_addr: str, to_addrs: list[str], msg: str) -> None:
+                recorded["from"] = from_addr
+                recorded["to"] = to_addrs
+                recorded["msg_len"] = len(msg)
+                recorded["msg_contains_subject"] = "Subject: Hi from M5" in msg
+
+            def quit(self) -> None:
+                recorded["quit"] = True
+
+        import cowork_core.tools.email.send as send_mod
+        monkeypatch.setattr(send_mod.smtplib, "SMTP", FakeSMTP)
+
+        # Draft → confirmed send.
+        draft = email_draft(
+            to="alice@example.com",
+            subject="Hi from M5",
+            body="Hello!",
+            cc="bob@example.com",
+            tool_context=fake,
+        )
+        result = email_send(
+            eml_id=str(draft["eml_id"]),
+            confirmed=True,
+            tool_context=fake,
+        )
+
+        assert result.get("status") == "sent", result
+        assert result["to"] == "alice@example.com"
+        # Wire shape verified.
+        assert recorded["host"] == "smtp.example.com"
+        assert recorded["port"] == 587
+        assert recorded.get("starttls") is True
+        assert recorded["user"] == "me@cowork.local"
+        assert recorded["password"] == "hunter2"
+        assert recorded["from"] == "me@cowork.local"
+        assert "alice@example.com" in recorded["to"]  # type: ignore[operator]
+        assert "bob@example.com" in recorded["to"]  # type: ignore[operator]
+        assert recorded["msg_contains_subject"] is True
+        assert recorded.get("quit") is True
+
+    def test_smtp_no_tls_no_auth(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Local relay path — no TLS, no auth. Cowork should not call
+        ``starttls`` or ``login`` when those are turned off."""
+        ws = Workspace(root=tmp_path)
+        reg = ProjectRegistry(workspace=ws)
+        project = reg.create("EmailLocalRelay")
+        session = reg.new_session("emaillocalrelay")
+        cfg = CoworkConfig(
+            email=EmailConfig(
+                default_from="me@cowork.local",
+                smtp_host="localhost",
+                smtp_port=25,
+                use_tls=False,
+            ),
+        )
+        ctx = CoworkToolContext(
+            workspace=ws,
+            registry=reg,
+            project=project,
+            session=session,
+            config=cfg,
+            skills=SkillRegistry(),
+            env=ManagedExecEnv(project=project, session=session),
+            approvals=InMemoryApprovalStore(),
+        )
+        fake = MagicMock()
+        fake.state = {COWORK_CONTEXT_KEY: ctx}
+
+        recorded: dict[str, object] = {}
+
+        class FakeSMTP:
+            def __init__(self, host: str, port: int) -> None:
+                recorded["init"] = (host, port)
+
+            def starttls(self) -> None:
+                recorded["starttls"] = True  # should never run
+
+            def login(self, *_: object) -> None:
+                recorded["login"] = True  # should never run
+
+            def sendmail(self, *_: object) -> None:
+                recorded["sendmail"] = True
+
+            def quit(self) -> None:
+                recorded["quit"] = True
+
+        import cowork_core.tools.email.send as send_mod
+        monkeypatch.setattr(send_mod.smtplib, "SMTP", FakeSMTP)
+
+        draft = email_draft(
+            to="alice@example.com",
+            subject="No-TLS",
+            body="Plain SMTP.",
+            tool_context=fake,
+        )
+        result = email_send(
+            eml_id=str(draft["eml_id"]),
+            confirmed=True,
+            tool_context=fake,
+        )
+
+        assert result.get("status") == "sent", result
+        assert recorded["init"] == ("localhost", 25)
+        assert "starttls" not in recorded
+        assert "login" not in recorded
+        assert recorded.get("sendmail") is True
+        assert recorded.get("quit") is True
+
+    def test_smtp_send_failure_returns_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SMTP exceptions surface as ``{"error": ...}`` rather than
+        propagating — keeps the agent loop alive."""
+        ws = Workspace(root=tmp_path)
+        reg = ProjectRegistry(workspace=ws)
+        project = reg.create("EmailFailing")
+        session = reg.new_session("emailfailing")
+        cfg = CoworkConfig(
+            email=EmailConfig(
+                default_from="me@cowork.local",
+                smtp_host="smtp.example.com",
+                use_tls=False,
+            ),
+        )
+        ctx = CoworkToolContext(
+            workspace=ws,
+            registry=reg,
+            project=project,
+            session=session,
+            config=cfg,
+            skills=SkillRegistry(),
+            env=ManagedExecEnv(project=project, session=session),
+            approvals=InMemoryApprovalStore(),
+        )
+        fake = MagicMock()
+        fake.state = {COWORK_CONTEXT_KEY: ctx}
+
+        class FakeSMTP:
+            def __init__(self, *_: object) -> None:
+                raise OSError("connection refused")
+
+        import cowork_core.tools.email.send as send_mod
+        monkeypatch.setattr(send_mod.smtplib, "SMTP", FakeSMTP)
+
+        draft = email_draft(
+            to="alice@example.com",
+            subject="Boom",
+            body="…",
+            tool_context=fake,
+        )
+        result = email_send(
+            eml_id=str(draft["eml_id"]),
+            confirmed=True,
+            tool_context=fake,
+        )
+        assert "error" in result
+        assert "SMTP send failed" in str(result["error"])
+        assert "connection refused" in str(result["error"])
