@@ -17,6 +17,7 @@ Collision policy: project-scoped skills shadow global ones with the same
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -24,6 +25,13 @@ from typing import Any, Literal
 import yaml  # type: ignore[import-untyped]
 
 _FRONTMATTER_FENCE = "---"
+
+# Hard cap on how many description characters reach the root agent's
+# system prompt. The full description is still available verbatim
+# via ``Skill.description`` for the UI; only the prompt-injection
+# snippet is truncated. Slice II safety: a third-party skill can't
+# smuggle long instructions in via its description.
+DESCRIPTION_PROMPT_CAP = 300
 
 # Where a skill came from. ``bundled`` ships inside the
 # ``cowork-core`` package and is immutable; ``user`` lives under
@@ -201,11 +209,34 @@ class SkillRegistry:
     def names(self) -> list[str]:
         return sorted(self._skills)
 
-    def injection_snippet(self) -> str:
-        """One line per skill for the root agent's system prompt."""
+    def injection_snippet(
+        self,
+        enabled: Callable[[str], bool] | None = None,
+    ) -> str:
+        """One line per skill for the root agent's system prompt.
+
+        Each line is capped at ``DESCRIPTION_PROMPT_CAP`` characters
+        (with a trailing ellipsis when clipped) so a malicious
+        third-party skill can't smuggle long instructions into the
+        system prompt via its description field. The full description
+        is still surfaced verbatim to the UI through ``SkillInfo``.
+
+        ``enabled`` is an optional per-session predicate: skills for
+        which it returns False are omitted entirely. ``None`` (the
+        default) treats every skill as enabled.
+        """
         if not self._skills:
             return ""
-        lines = [f"- {s.name}: {s.description}" for s in self.all_skills()]
+        lines: list[str] = []
+        for s in self.all_skills():
+            if enabled is not None and not enabled(s.name):
+                continue
+            desc = s.description
+            if len(desc) > DESCRIPTION_PROMPT_CAP:
+                desc = desc[: DESCRIPTION_PROMPT_CAP - 1].rstrip() + "…"
+            lines.append(f"- {s.name}: {desc}")
+        if not lines:
+            return ""
         return "Available skills (call `load_skill(name)` to load):\n" + "\n".join(lines)
 
 

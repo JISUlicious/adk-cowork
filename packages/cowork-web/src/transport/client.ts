@@ -391,6 +391,35 @@ export class CoworkClient {
     return Boolean((await r.json()).enabled);
   }
 
+  /** Per-session skill enable map (Slice II). Skills absent from the
+   *  returned dict default to enabled — UIs send only the entries
+   *  they want to override. The root agent's prompt registry omits
+   *  disabled skills on the next turn; ``load_skill`` refuses them. */
+  async getSessionSkillsEnabled(sessionId: string): Promise<Record<string, boolean>> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/skills_enabled`,
+      { headers: this.jsonHeaders() },
+    );
+    if (!r.ok) throw new Error(`getSessionSkillsEnabled: ${r.status}`);
+    return ((await r.json()).enabled ?? {}) as Record<string, boolean>;
+  }
+
+  async setSessionSkillsEnabled(
+    sessionId: string,
+    enabled: Record<string, boolean>,
+  ): Promise<Record<string, boolean>> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/skills_enabled`,
+      {
+        method: "PUT",
+        headers: this.jsonHeaders(),
+        body: JSON.stringify({ enabled }),
+      },
+    );
+    if (!r.ok) throw new Error(`setSessionSkillsEnabled: ${r.status}`);
+    return ((await r.json()).enabled ?? {}) as Record<string, boolean>;
+  }
+
   /**
    * Create a new session.
    *

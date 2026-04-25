@@ -491,3 +491,87 @@ async def test_runtime_project_skill_shadows_global(tmp_path: Path) -> None:
     ctx = sess.state[COWORK_CONTEXT_KEY]
     body = ctx.skills.get("docx-basic").load_body()
     assert "overridden in project" in body
+
+
+# ─────────────── Slice II — safety + per-session enable ───────────────
+
+
+def test_injection_snippet_caps_long_description(tmp_path: Path) -> None:
+    """A malicious skill with a 1000-char description gets truncated to
+    ``DESCRIPTION_PROMPT_CAP`` chars in the prompt. The full
+    description still reaches ``Skill.description`` for the UI."""
+    from cowork_core.skills.loader import DESCRIPTION_PROMPT_CAP
+
+    long = "X" * 1000
+    skill_dir = tmp_path / "noisy"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        f'---\nname: noisy\ndescription: "{long}"\nlicense: MIT\n---\nbody\n',
+        encoding="utf-8",
+    )
+    reg = SkillRegistry()
+    reg.scan(tmp_path)
+
+    snippet = reg.injection_snippet()
+    # Each line is "- name: description". The line for ``noisy`` is
+    # capped at DESCRIPTION_PROMPT_CAP chars of description, plus the
+    # ellipsis and the "- noisy: " prefix.
+    noisy_line = next(line for line in snippet.splitlines() if line.startswith("- noisy:"))
+    desc = noisy_line[len("- noisy: ") :]
+    assert len(desc) == DESCRIPTION_PROMPT_CAP, len(desc)
+    assert desc.endswith("…")
+    # Untruncated description preserved on the dataclass.
+    assert reg.get("noisy").description == long
+
+
+def test_injection_snippet_omits_disabled_skills(tmp_path: Path) -> None:
+    """When ``enabled`` returns False for a skill, that skill is
+    omitted from the snippet. Absent-from-map skills default to
+    enabled (predicate returns True)."""
+    _make_skill(tmp_path, "alpha")
+    _make_skill(tmp_path, "beta")
+    reg = SkillRegistry()
+    reg.scan(tmp_path)
+
+    snippet = reg.injection_snippet(enabled=lambda name: name != "beta")
+    assert "alpha" in snippet
+    assert "beta" not in snippet
+
+
+def test_load_skill_refuses_disabled(tmp_path: Path) -> None:
+    """Even if the model guesses a disabled skill's name, the tool
+    refuses with an explanatory error instead of loading the body.
+    Mirror of the prompt-side gate."""
+    from cowork_core.tools.base import COWORK_SKILLS_ENABLED_KEY
+
+    ws = Workspace(root=tmp_path)
+    pr = ProjectRegistry(workspace=ws)
+    project = pr.create("Sierra")
+    session = pr.new_session("sierra")
+
+    skills_dir = project.skills_dir
+    _make_skill(skills_dir, "secret", "off-limits")
+    skill_reg = SkillRegistry()
+    skill_reg.scan(skills_dir)
+
+    ctx = CoworkToolContext(
+        workspace=ws,
+        registry=pr,
+        project=project,
+        session=session,
+        config=CoworkConfig(),
+        skills=skill_reg,
+        env=ManagedExecEnv(project=project, session=session),
+        approvals=InMemoryApprovalStore(),
+    )
+    fake = MagicMock()
+    fake.state = {
+        COWORK_CONTEXT_KEY: ctx,
+        COWORK_SKILLS_ENABLED_KEY: {"secret": False},
+    }
+
+    out = load_skill("secret", fake)
+    assert "error" in out
+    assert "disabled" in str(out["error"]).lower()
+    # And the body is *not* leaked through.
+    assert "off-limits" not in str(out)

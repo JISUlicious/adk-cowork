@@ -240,7 +240,7 @@ trip cleanly. Cowork additionally records a SHA-256 of each
 disk matches what they installed. See `docs/WRITING_A_SKILL.md`
 for a longer treatment.
 
-Only `name` + `description` are injected into the root agent's system prompt (a registry line). The body is loaded into context only when the agent calls `load_skill("docx-basic")`. This is the Claude Code skills pattern and keeps system prompts small even with many skills installed.
+Only `name` + `description` are injected into the root agent's system prompt (a registry line). The body is loaded into context only when the agent calls `load_skill("docx-basic")`. This is the Claude Code skills pattern and keeps system prompts small even with many skills installed. The description is **capped at 300 chars** (Slice II safety) before reaching the prompt — a malicious third-party skill can't smuggle long instructions through its description; the full text still reaches the UI verbatim. Per-session enable/disable lives on `cowork.skills_enabled` state (Slice II): disabled skills are omitted from the prompt registry **and** `load_skill` refuses them with an explanatory error, so the gate holds even if the model guesses the name.
 
 **Default bundled skills (Cowork, MIT):**
 

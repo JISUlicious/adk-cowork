@@ -40,6 +40,7 @@ from cowork_core.tools import (
     COWORK_CONTEXT_KEY,
     COWORK_POLICY_MODE_KEY,
     COWORK_PYTHON_EXEC_KEY,
+    COWORK_SKILLS_ENABLED_KEY,
     COWORK_TOOL_ALLOWLIST_KEY,
     CoworkToolContext,
     ToolRegistry,
@@ -968,6 +969,66 @@ class CoworkRuntime:
             raise ValueError(f"no session {session_id}")
         stored = session.state.get(COWORK_AUTO_ROUTE_KEY, True)
         return stored if isinstance(stored, bool) else True
+
+    async def set_session_skills_enabled(
+        self,
+        session_id: str,
+        enabled: dict[str, bool],
+        user_id: str = "local",
+    ) -> dict[str, bool]:
+        """Persist the per-session skill enable map.
+
+        Slice II. Skills absent from the dict default to enabled, so
+        an empty map silences nothing — UIs send only the entries
+        they want to override. The root prompt's skill registry omits
+        disabled skills, and ``load_skill`` refuses them.
+        """
+        if not isinstance(enabled, dict):
+            raise ValueError(
+                f"skills_enabled must be a dict, got {type(enabled).__name__}",
+            )
+        normalised: dict[str, bool] = {}
+        for name, flag in enabled.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"skill name must be a non-empty string, got {name!r}")
+            if not isinstance(flag, bool):
+                raise ValueError(
+                    f"skills_enabled[{name!r}] must be a bool, got {type(flag).__name__}",
+                )
+            normalised[name] = flag
+
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+
+        from google.adk.events.event import Event
+        from google.adk.events.event_actions import EventActions
+
+        event = Event(
+            author="cowork-server",
+            invocation_id="",
+            actions=EventActions(state_delta={COWORK_SKILLS_ENABLED_KEY: normalised}),
+        )
+        await self.runner.session_service.append_event(session, event)
+        return normalised
+
+    async def get_session_skills_enabled(
+        self,
+        session_id: str,
+        user_id: str = "local",
+    ) -> dict[str, bool]:
+        """Return the session's skill enable map (default ``{}``)."""
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+        stored = session.state.get(COWORK_SKILLS_ENABLED_KEY, {})
+        if not isinstance(stored, dict):
+            return {}
+        return {k: bool(v) for k, v in stored.items() if isinstance(k, str)}
 
     async def grant_tool_approval(
         self,

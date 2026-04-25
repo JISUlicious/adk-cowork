@@ -232,6 +232,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Settings → Skills (name + description + license) | Settings | wired | Slice A T2 |
 | Skills: install / uninstall UX (.zip) | Settings | wired | Slice B |
 | Skills: version + triggers + content_hash + validate route | Server / Settings | wired | Slice I |
+| Skills: 300-char description cap + per-session enable/disable | Core / Server / Settings | wired | Slice II |
 | MCP: stdio + sse + http transports + tool_filter + per-server status | Core / Settings | wired | Slice III |
 | MCP: dynamic config (servers.json) + add / delete / restart routes + Settings UI | Core / Server / Settings | wired | Slice IV |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |

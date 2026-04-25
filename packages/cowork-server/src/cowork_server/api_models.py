@@ -304,6 +304,19 @@ class SetAutoRouteRequest(BaseModel):
     enabled: bool
 
 
+class SkillsEnabledResponse(BaseModel):
+    """Per-session skill enable map (Slice II). Skills absent from
+    ``enabled`` default to enabled — UIs send only overrides."""
+
+    enabled: dict[str, bool]
+
+
+class SetSkillsEnabledRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: dict[str, bool]
+
+
 # ── Tag: approvals ─────────────────────────────────────────────────
 
 
@@ -442,6 +455,7 @@ __all__ = [
     "PythonExecResponse", "SetPythonExecRequest",
     "ToolAllowlistResponse", "SetToolAllowlistRequest",
     "AutoRouteResponse", "SetAutoRouteRequest",
+    "SkillsEnabledResponse", "SetSkillsEnabledRequest",
     # approvals
     "GrantApprovalRequest", "GrantApprovalResponse",
     # notifications

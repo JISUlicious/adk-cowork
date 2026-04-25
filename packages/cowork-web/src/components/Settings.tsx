@@ -132,7 +132,7 @@ export function Settings({ client, sessionId, userId, surface, onClose }: Props)
                   sessionId={sessionId}
                   surface={surface}
                 />
-                <SecTools client={client} surface={surface} />
+                <SecTools client={client} sessionId={sessionId} surface={surface} />
               </>
             )}
             {tab === "approvals" && <SecApprovals client={client} sessionId={sessionId} />}
@@ -455,9 +455,11 @@ const LOCAL_MODE_HIDDEN_TOOLS = new Set(["fs_promote"]);
 
 function SecTools({
   client,
+  sessionId,
   surface,
 }: {
   client: CoworkClient;
+  sessionId: string | null;
   surface?: "managed" | "local";
 }) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
@@ -465,6 +467,34 @@ function SecTools({
   const [installBusy, setInstallBusy] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Slice II — per-session skill enable overrides. Empty map = all
+  // enabled (the default). Loaded once per session change; the row
+  // toggle does an optimistic flip + PUT, with revert on failure.
+  const [skillsEnabled, setSkillsEnabled] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!sessionId) {
+      setSkillsEnabled({});
+      return;
+    }
+    client
+      .getSessionSkillsEnabled(sessionId)
+      .then(setSkillsEnabled)
+      .catch(() => setSkillsEnabled({}));
+  }, [client, sessionId]);
+
+  const isSkillEnabled = (name: string) => skillsEnabled[name] !== false;
+  const toggleSkillEnabled = async (name: string) => {
+    if (!sessionId) return;
+    const next = { ...skillsEnabled, [name]: !isSkillEnabled(name) };
+    setSkillsEnabled(next);
+    try {
+      const applied = await client.setSessionSkillsEnabled(sessionId, next);
+      setSkillsEnabled(applied);
+    } catch {
+      setSkillsEnabled(skillsEnabled);
+    }
+  };
 
   const refreshHealth = () => {
     client
@@ -597,6 +627,7 @@ function SecTools({
       ) : (
         (health?.skills ?? []).map((s) => {
           const removable = s.source === "user";
+          const enabled = isSkillEnabled(s.name);
           return (
             <Field
               key={s.name}
@@ -612,8 +643,33 @@ function SecTools({
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 8,
+                  opacity: enabled ? 1 : 0.55,
                 }}
               >
+                <button
+                  type="button"
+                  onClick={() => sessionId && void toggleSkillEnabled(s.name)}
+                  disabled={!sessionId}
+                  title={
+                    !sessionId
+                      ? "Open a session to toggle"
+                      : enabled
+                        ? "Disable for this session — hidden from prompt; load_skill refused"
+                        : "Re-enable for this session"
+                  }
+                  style={{
+                    fontSize: "var(--fs-xs)",
+                    fontFamily: "var(--mono)",
+                    padding: "1px 6px",
+                    borderRadius: "var(--radius-sm)",
+                    border: "1px solid var(--line)",
+                    background: enabled ? "var(--paper)" : "var(--paper-2)",
+                    color: enabled ? "var(--ok, #2a7)" : "var(--ink-4)",
+                    cursor: sessionId ? "pointer" : "not-allowed",
+                  }}
+                >
+                  {enabled ? "on" : "off"}
+                </button>
                 {s.version && s.version !== "0.0.0" && (
                   <span
                     style={{

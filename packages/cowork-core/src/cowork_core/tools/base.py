@@ -43,6 +43,14 @@ COWORK_TOOL_ALLOWLIST_KEY = "cowork.tool_allowlist"
 # Tier E.E2.
 COWORK_AUTO_ROUTE_KEY = "cowork.auto_route"
 
+# Per-session ``dict[str, bool]`` — skill name → enabled. Absent skill
+# defaults to enabled, so a skill installed mid-session shows up
+# without further action. The root agent's prompt registry omits
+# disabled skills; ``load_skill`` refuses them with an explanatory
+# error so the model can't bypass the gate by guessing the name.
+# Slice II.
+COWORK_SKILLS_ENABLED_KEY = "cowork.skills_enabled"
+
 
 @dataclass(frozen=True)
 class CoworkToolContext:

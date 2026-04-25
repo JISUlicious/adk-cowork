@@ -79,7 +79,9 @@ from cowork_server.api_models import (
     SetAutoRouteRequest,
     SetPolicyModeRequest,
     SetPythonExecRequest,
+    SetSkillsEnabledRequest,
     SetToolAllowlistRequest,
+    SkillsEnabledResponse,
     ToolAllowlistResponse,
     UploadFileResult,
 )
@@ -420,6 +422,53 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         """
         try:
             applied = await runtime.set_session_auto_route(
+                session_id=session_id, enabled=body.enabled, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if message.startswith("no session"):
+                raise HTTPException(status_code=404, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {"enabled": applied}
+
+    @app.get(
+        "/v1/sessions/{session_id}/policy/skills_enabled",
+        tags=["policy"],
+        summary="Get the per-session skill enable map",
+        response_model=SkillsEnabledResponse,
+    )
+    async def get_session_skills_enabled_policy(
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, dict[str, bool]]:
+        """Slice II — return the session's skill enable overrides.
+        Skills absent from the dict default to enabled, so the empty
+        map is the unrestricted default."""
+        try:
+            enabled = await runtime.get_session_skills_enabled(
+                session_id=session_id, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"enabled": enabled}
+
+    @app.put(
+        "/v1/sessions/{session_id}/policy/skills_enabled",
+        tags=["policy"],
+        summary="Set the per-session skill enable map",
+        response_model=SkillsEnabledResponse,
+    )
+    async def set_session_skills_enabled_policy(
+        session_id: str,
+        body: SetSkillsEnabledRequest,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, dict[str, bool]]:
+        """Replace the session's skill enable overrides. The root
+        prompt's skill registry omits disabled skills on the next
+        turn; ``load_skill`` refuses them with an explanatory
+        error."""
+        try:
+            applied = await runtime.set_session_skills_enabled(
                 session_id=session_id, enabled=body.enabled, user_id=user.user_id,
             )
         except ValueError as exc:

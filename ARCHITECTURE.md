@@ -86,7 +86,13 @@ agent's prompt registry line is re-read from
 `runtime.skills.injection_snippet()` on every turn
 (`_dynamic_instruction` closes over the live registry, not a
 static string) so newly-installed skills appear in the next
-turn's prompt without a process restart.
+turn's prompt without a process restart. The same
+`injection_snippet` caps each description at 300 chars
+(`DESCRIPTION_PROMPT_CAP`) so a malicious skill can't smuggle
+long instructions in (Slice II safety), and accepts an `enabled`
+predicate that reads `cowork.skills_enabled` — disabled skills
+drop out of the snippet, and `load_skill` mirrors the gate by
+refusing them at the tool layer.
 
 **MCP servers.** Two scopes: `[[mcp_servers]]` in `cowork.toml`
 declares **bundled** servers (immutable from the API), and

@@ -32,6 +32,7 @@ from cowork_core.policy.permissions import (
 )
 from cowork_core.tools.base import (
     COWORK_AUTO_ROUTE_KEY,
+    COWORK_SKILLS_ENABLED_KEY,
     COWORK_CONTEXT_KEY,
     COWORK_POLICY_MODE_KEY,
 )
@@ -268,7 +269,19 @@ def build_root_agent(
         # feature off for the session.
         raw_auto_route = ctx.state.get(COWORK_AUTO_ROUTE_KEY, True)
         auto_route = raw_auto_route if isinstance(raw_auto_route, bool) else True
-        snippet = skills.injection_snippet() if skills is not None else skills_snippet
+        # Per-session skill enable map — absent skill = enabled. Slice II.
+        raw_enabled = ctx.state.get(COWORK_SKILLS_ENABLED_KEY, {})
+        enabled_map: dict[str, bool] = (
+            {k: bool(v) for k, v in raw_enabled.items() if isinstance(k, str)}
+            if isinstance(raw_enabled, dict)
+            else {}
+        )
+        if skills is not None:
+            snippet = skills.injection_snippet(
+                enabled=lambda name: enabled_map.get(name, True),
+            )
+        else:
+            snippet = skills_snippet
         return _compose_instruction(
             working_context, snippet, mode, auto_route=auto_route,
         )

@@ -230,7 +230,7 @@ Slice III — MCP transports + tool_filter + status surface (commit c28dfb9):
 - update Settings → System — render MCP servers row with green/red counts and last_error tooltip
 - add tests/test_mcp.py — 7 transport / status tests; extend tests/test_openapi.py — verify HealthResponse.mcp `$ref` to MCPServerStatusInfo
 
-Slice IV — MCP dynamic config + CRUD routes + Settings UI + restart (this commit):
+Slice IV — MCP dynamic config + CRUD routes + Settings UI + restart (commit d6f29bd):
 - add cowork_core/runner.py `_user_mcp_servers_path` / `_load_user_mcp_servers` / `_save_user_mcp_servers` / `_effective_mcp_servers` — TOML (bundled) + `<workspace>/global/mcp/servers.json` (user) merge with user-overrides-bundled-on-collision
 - add CoworkRuntime methods: `list_mcp_servers`, `dry_run_mcp_server`, `save_mcp_server`, `delete_mcp_server`, `restart_mcp` — restart rebuilds agent + Runner in place, preserving `session_service`
 - add MCPInstallError + `_validate_mcp_name` (alphanumeric / `_-`, ≤64 chars) — same error shape as skills install
@@ -243,8 +243,21 @@ Slice IV — MCP dynamic config + CRUD routes + Settings UI + restart (this comm
 - update README.md — new feature row "MCP: dynamic config (servers.json) + add / delete / restart routes + Settings UI"
 - update ARCHITECTURE.md — extend MCP paragraph with two-scope merge model, dry-run-on-POST, restart-only reload contract
 
-Slice V — MCP docs + Settings preset dropdown (this commit):
+Slice V — MCP docs + Settings preset dropdown (commit f9b4be8):
 - add docs/MCP.md — transports, dynamic config, three worked examples (filesystem / GitHub / memory) using official Anthropic MCP servers via `npx -y`, restart-only reload contract, recovery and tool_filter notes
 - add Settings → MCP add-form "Common servers" dropdown — pre-fills name + transport + command/args/env from the same three presets so users avoid hand-typing the npx invocation
 - update README.md Documentation section — link to docs/MCP.md
 - update SPEC.md §2.13 M3 — tick MCP adapter milestone (Slices III + IV); footnote pointing at docs/MCP.md for the npx-based filesystem worked example (cull-audit decision: do not bundle a Cowork-specific FS MCP server)
+
+Slice II — skills safety + per-session enable/disable (this commit):
+- update cowork_core/skills/loader.py — add `DESCRIPTION_PROMPT_CAP = 300`; `injection_snippet` caps per-skill description at the cap (with `…` ellipsis) and accepts an optional `enabled` predicate that omits disabled skills entirely
+- update cowork_core/agents/root_agent.py — `_dynamic_instruction` reads `cowork.skills_enabled` from session state and threads a closure into `injection_snippet`
+- update cowork_core/skills/load_skill_tool.py — refuse disabled skills at the tool layer with an explanatory error so the gate holds even if the model guesses the name
+- add COWORK_SKILLS_ENABLED_KEY to cowork_core/tools/base.py + re-export
+- add CoworkRuntime.set_session_skills_enabled / get_session_skills_enabled — OCC-safe via session_service.append_event with state_delta
+- add cowork_server `SkillsEnabledResponse` + `SetSkillsEnabledRequest` and `GET/PUT /v1/sessions/{id}/policy/skills_enabled` routes
+- add cowork-web client methods `getSessionSkillsEnabled` / `setSessionSkillsEnabled` and Settings → Skills per-row on/off toggle (gated on active session)
+- add tests/test_skills.py — 3 new tests (description cap truncation + ellipsis, predicate-omits-disabled, load_skill refuses disabled); 31 total in test_skills.py, 234 overall
+- update SPEC.md §2.5.1 — note the prompt-side description cap and per-session enable gate
+- update ARCHITECTURE.md — extend skills paragraph with the cap + predicate
+- update README.md — new feature row "Skills: 300-char description cap + per-session enable/disable"
