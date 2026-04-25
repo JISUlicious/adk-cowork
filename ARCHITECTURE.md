@@ -289,6 +289,42 @@ at module import time and exposing the two Protocol classes — no
 factory rewrite. Skills + MCP keep their current paths in S1; a
 later slice migrates them onto these abstractions.
 
+### Memory subsystem (Slice S2)
+
+The first consumer of the storage abstraction. `cowork_core/memory/`
+ships four agent tools (`memory_read`, `memory_write`, `memory_log`,
+`memory_remember`) that route through `ctx.user_store` /
+`ctx.project_store`, never touching paths or DBs directly. Same
+call sites work in single-user (FS) and multi-user (SQLite) mode.
+
+The pattern is Karpathy's "LLM Wiki" — markdown files the LLM
+maintains, with a per-store `schema.md` describing the conventions.
+`MemoryRegistry.injection_snippet(ctx)` produces a one-line summary
+per turn (page counts + pointer to `memory_read(scope, "schema.md")`);
+the schema body loads on demand via `memory_read`. This mirrors
+the skill pattern of injecting `name + capped description` and
+loading the body via `load_skill` only when needed — no eager
+multi-KB schema injection that would blow the prompt budget skills
+deliberately bound at 300 chars per entry.
+
+`memory_write` enforces an allowlist: agent can write `index.md`
+and `pages/*.md` only. `schema.md` is user-edited (the agent must
+not rewrite its own conventions). `log.md` is `memory_log`-only
+(server stamps `[YYYY-MM-DD]` so the log format stays parseable
+across agents and turns). `raw/*` is sacred — user uploads only.
+Bootstrap is lazy: the first memory tool call for a scope copies
+the bundled `cowork_core/memory/bundled/default_schema.md` into
+the store if missing, idempotent.
+
+`memory_remember(content, scope="project")` stays dumb on purpose
+— it appends a timestamped note to `pages/scratch.md`. The agent's
+*next* turn (per the schema's "Remember" workflow) decides whether
+the note belongs in an existing page or a new one. Sub-LLM routing
+inside a tool would mean either spinning up a second `LlmAgent`
+(heavy) or a direct `build_model()` call (violates the
+surfaces-never-import-core-internals layering). Dumb appends + a
+schema instruction is the cleaner cut.
+
 ## 6. File surfaces — managed vs local-dir
 
 Two `ExecEnv` implementations select the agent's filesystem view:

@@ -263,6 +263,27 @@ Only `name` + `description` are injected into the root agent's system prompt (a 
 3. **Works on small local models.** Short MIT skills (50–150 lines) are far more reliable on a local 4-bit Qwen than a 590-line instruction bundle tuned for Sonnet/Opus.
 4. **Power-user escape hatch intact.** The execution surface (`shell.run` + `python_exec` + `fs.edit`) can drive any skill a user installs, including Anthropic's, if they've installed the prerequisites.
 
+### 2.5.2 Memory (LLM Wiki pattern, Slice S2)
+
+A **memory store** is a markdown wiki the LLM maintains itself —
+pattern after [Karpathy's "LLM Wiki"](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+Two scopes: `user` (cross-project) and `project` (per-project).
+Each store has the same shape: `schema.md` (conventions),
+`index.md` (catalog), `log.md` (chronological), `pages/` (agent-
+authored), `raw/` (user uploads). Storage routes through the S1
+`UserStore` / `ProjectStore` abstractions — single-user filesystems
+under `~/.config/cowork/memory/` and `<workdir>/.cowork/memory/`,
+multi-user SQLite rows in `<workspace>/multiuser.db`.
+
+Four tools (`memory_read`, `memory_write`, `memory_log`,
+`memory_remember`) are file-I/O primitives the agent composes
+under the schema's instructions. Per-turn prompt cost is one line
+(page counts + pointer to `memory_read(scope, "schema.md")`); the
+schema body loads on demand to stay within the same prompt-budget
+convention skills use. No embeddings / vector store — `index.md`
++ ripgrep handles up to ~hundreds of pages per scope. Full
+treatment in [`docs/MEMORY.md`](docs/MEMORY.md).
+
 ### 2.6 Policy / permissions / hooks
 
 - **Permission modes** (borrowed from Claude Code / opencode): `plan` (read-only, no writes, no shell), `work` (writes inside workspace, shell requires confirm), `auto` (full, used in server mode with a pre-approved allowlist).

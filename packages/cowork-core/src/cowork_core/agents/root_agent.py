@@ -192,23 +192,31 @@ def _compose_instruction(
     skills_snippet: str,
     policy_mode: str,
     auto_route: bool = True,
+    memory_snippet: str = "",
 ) -> str:
     """Assemble the root system prompt for a single turn.
 
     Header → env-specific working-context paragraph → tool-use guidance →
     sub-agent guidance → optional ``@``-mention protocol → optional skill
-    catalog → optional plan-mode addendum.
+    catalog → optional memory registry line → optional plan-mode addendum.
 
     ``auto_route`` gates the ``@``-mention paragraph. When off, the
     root sees an unannotated user message and decides delegation
     normally — escape hatch for sessions where the routing directive
     misbehaves.
+
+    ``memory_snippet`` (Slice S2) is a single line per active scope
+    pointing at ``memory_read(scope, "schema.md")`` so the agent can
+    discover the conventions on demand. Empty string = no memory yet,
+    omit entirely.
     """
     parts = [ROOT_HEADER.rstrip(), working_context.rstrip(), ROOT_TAIL.rstrip()]
     if auto_route:
         parts.append(AT_MENTION_PROTOCOL.rstrip())
     if skills_snippet:
         parts.append(skills_snippet.rstrip())
+    if memory_snippet:
+        parts.append(memory_snippet.rstrip())
     prompt = "\n\n".join(parts) + "\n"
     if policy_mode == "plan":
         prompt = prompt + PLAN_MODE_ADDENDUM
@@ -252,6 +260,7 @@ def build_root_agent(
     skills_snippet: str = "",
     skills: Any = None,
     mcp_tool_owner: dict[str, str] | None = None,
+    memory: Any = None,
 ) -> LlmAgent:
     # Dynamic instruction — resolved per turn so the working-context paragraph
     # reflects the session's ExecEnv and the policy-mode addendum reflects
@@ -284,8 +293,24 @@ def build_root_agent(
             )
         else:
             snippet = skills_snippet
+        # Slice S2 — memory registry snippet. Single line per active
+        # scope; empty string when both scopes have no pages (the
+        # registry's own decision). Cheap: one ``store.list`` per
+        # scope.
+        memory_snippet = ""
+        if memory is not None:
+            cowork_ctx = ctx.state.get(COWORK_CONTEXT_KEY)
+            if cowork_ctx is not None:
+                try:
+                    memory_snippet = memory.injection_snippet(cowork_ctx)
+                except Exception:
+                    memory_snippet = ""
         return _compose_instruction(
-            working_context, snippet, mode, auto_route=auto_route,
+            working_context,
+            snippet,
+            mode,
+            auto_route=auto_route,
+            memory_snippet=memory_snippet,
         )
 
     model = build_model(cfg.model)

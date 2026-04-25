@@ -276,6 +276,32 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Memory subsystem — Slice S2 (LLM Wiki on top of stores) (2026-04-25)
+
+First consumer of the S1 storage abstraction. Karpathy's "LLM Wiki"
+pattern: per-scope markdown wiki the agent maintains, no embeddings,
+just `index.md` + ripgrep at scale. Two scopes (`user` cross-project
++ `project` per-project) routed through `ctx.user_store` /
+`ctx.project_store` — same call sites in SU (filesystem) and MU
+(SQLite). Per-turn prompt injection is one line per scope (page
+count + pointer to `memory_read(scope, "schema.md")`); the schema
+body loads on demand, mirroring the skills name+description / load
+body pattern.
+
+- add `packages/cowork-core/src/cowork_core/memory/` package — `tools.py` (memory_read, memory_write, memory_log, memory_remember + register_memory_tools), `bootstrap.py` (memory_key, is_writable_target, ensure_bootstrapped, bundled_default_schema, _project_id resolver), `registry.py` (MemoryRegistry with injection_snippet), `bundled/default_schema.md` (Karpathy-flavoured default conventions for both scopes)
+- update `cowork_core/runner.py` — call register_memory_tools alongside register_skill_tools; construct MemoryRegistry; thread it into build_root_agent (both fresh build and restart_mcp paths); add `runtime.memory: MemoryRegistry` field
+- update `cowork_core/agents/root_agent.py` — `build_root_agent` accepts `memory: MemoryRegistry | None`; `_dynamic_instruction` calls `memory.injection_snippet(ctx)` when the cowork context is on session state and threads the result into `_compose_instruction(memory_snippet=...)`. Snippet is empty when both scopes have zero pages so a fresh session prompt isn't cluttered with a "no memory yet" line.
+- update `cowork_core/tools/base.py` — `CoworkToolContext` gains `user_id: str = "local"` (defaults so existing test fixtures don't need updating; runner.py passes the real user_id from `_build_context`)
+- writes are gated: agent may only `memory_write` to `index.md` or `pages/*.md`. `schema.md` is user-edited (the agent must not rewrite its own conventions); `log.md` uses `memory_log` (server-stamped dates); `raw/*` is user uploads. `memory_log` validates `kind` against `^[a-z][a-z0-9_]{0,31}$` so a malicious value can't smuggle markdown into the log.
+- bootstrap is lazy — first memory tool call for a scope copies the bundled default `schema.md` if missing, idempotent thereafter
+- `memory_remember(content, scope="project")` stays dumb — appends to `pages/scratch.md` with a timestamp. Filing into proper pages is the agent's *next-turn* job per the schema's "Remember" workflow. Sub-LLM routing inside a tool was rejected as either heavy (new LlmAgent) or layering-violating (direct build_model in a tool).
+- add `tests/test_memory.py` — 27 new tests: key namespacing + path-traversal guards, write-target allowlist, bundled schema sanity, bootstrap on first read, bootstrap idempotency (doesn't clobber user-edited schema), memory_read missing/invalid, memory_write round-trip + rejections (schema/log/raw), memory_log dated entries + kind validation + multi-line title rejection, memory_remember scratch append + default-scope=project + scope=user routing + empty rejection, MemoryRegistry empty + page-count snippet, register_memory_tools, build_runtime smoke, end-to-end SU mode (FS file at `<workdir>/.cowork/memory/...`), end-to-end MU mode (SQLite row at `<workspace>/multiuser.db`)
+- add `docs/MEMORY.md` — concept doc + scope/storage matrix + tool reference + schema flow + Tier F deferred list
+- update `SPEC.md` §2.5.2 (peer of skills §2.5.1) — memory pattern + reference to docs/MEMORY.md
+- update `ARCHITECTURE.md` — extend Storage section with the memory paragraph (write-target allowlist + lazy bootstrap + dumb-remember rationale)
+- update `README.md` — feature row "Memory: LLM-Wiki pattern (4 tools, schema-as-config, two scopes) on top of storage" + Documentation row
+- 286 total tests green (was 259, +27)
+
 ### Storage hierarchy — Slice S1 (UserStore + ProjectStore + dual backings) (2026-04-25)
 
 Foundational refactor settling Cowork's storage model so future subsystems

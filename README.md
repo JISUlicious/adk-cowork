@@ -239,6 +239,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Email: end-to-end SMTP send with two-layer confirm gate | Core / Server | wired | M5 |
 | Desktop: persistent recent-workdir across launches | cowork-app | wired | M4-A |
 | Storage: UserStore / ProjectStore protocols + FS + SQLite backings (OpenCode-style FS layout) | Core | wired | S1 |
+| Memory: LLM-Wiki pattern (4 tools, schema-as-config, two scopes) on top of storage | Core | wired | S2 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |
@@ -294,6 +295,7 @@ multi-user mode) to unlock "Try it out" calls.
 - [File index](INDEX.md) -- every file with a one-liner
 - [Writing a skill](docs/WRITING_A_SKILL.md) -- frontmatter, layout, install, troubleshooting
 - [MCP servers](docs/MCP.md) -- transports, dynamic config, three worked examples (filesystem / GitHub / memory)
+- [Memory](docs/MEMORY.md) -- LLM-maintained markdown wiki (Karpathy pattern), two scopes, four tools, schema-as-config
 - [Changelog](CHANGELOG.md) -- append-only change log
 
 ## License

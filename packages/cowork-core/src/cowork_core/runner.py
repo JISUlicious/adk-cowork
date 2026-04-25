@@ -35,6 +35,7 @@ from cowork_core.notifications import (
 from cowork_core.config import CoworkConfig, McpServerConfig
 from cowork_core.execenv import LocalDirExecEnv, ManagedExecEnv
 from cowork_core.sessions import SqliteCoworkSessionService
+from cowork_core.memory import MemoryRegistry, register_memory_tools
 from cowork_core.skills import SkillRegistry, register_skill_tools
 from cowork_core.storage import (
     InMemoryProjectStore,
@@ -179,6 +180,9 @@ class CoworkRuntime:
     project_store: "ProjectStore" = field(
         default_factory=lambda: InMemoryProjectStore(),
     )
+    # Slice S2 — produces the per-turn prompt snippet for the memory
+    # subsystem. Stateless; one instance per runtime is fine.
+    memory: MemoryRegistry = field(default_factory=MemoryRegistry)
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -254,6 +258,7 @@ class CoworkRuntime:
             approvals=self.approvals,
             user_store=self.user_store,
             project_store=self.project_store,
+            user_id=user_id,
         )
 
     def _materialize_local_session(
@@ -731,6 +736,7 @@ class CoworkRuntime:
             skills_snippet=self.skills.injection_snippet(),
             skills=self.skills,
             mcp_tool_owner=self.mcp_tool_owner,
+            memory=self.memory,
         )
         # Keep the existing session_service (and therefore live
         # sessions); just give it a new agent. ADK's Runner accepts
@@ -1373,6 +1379,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     register_search_tools(tool_registry)
     register_email_tools(tool_registry)
     register_skill_tools(tool_registry)
+    register_memory_tools(tool_registry)
 
     # Mount configured MCP servers as toolsets, recording per-server
     # status so /v1/health and Settings can surface failures rather
@@ -1419,6 +1426,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         except RuntimeError:
             pass
 
+    memory = MemoryRegistry()
     agent = build_root_agent(
         cfg,
         tools=agent_tools,
@@ -1429,6 +1437,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         skills_snippet=skills.injection_snippet(),
         skills=skills,
         mcp_tool_owner=mcp_tool_owner,
+        memory=memory,
     )
 
     global_dir = workspace.root / "global"
@@ -1476,6 +1485,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         mcp_tool_owner=mcp_tool_owner,
         user_store=user_store,
         project_store=project_store,
+        memory=memory,
     )
 
 

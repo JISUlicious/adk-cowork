@@ -73,10 +73,16 @@ class CoworkToolContext:
     approvals: ApprovalStore
     # Slice S1 — storage hierarchy. Single-user mode: FS backings.
     # Multi-user mode: SQLite (or future Postgres/etc.). Tools call
-    # ``ctx.user_store.write(ctx.session.user_id, key, body)`` without
+    # ``ctx.user_store.write(ctx.user_id, key, body)`` without
     # knowing which backing they hit.
     user_store: UserStore
     project_store: ProjectStore
+    # Slice S2 — the authenticated user this context belongs to.
+    # ``"local"`` in single-user mode (CLI / desktop); a real user_id
+    # in multi-user mode (server with auth.keys). Required by both
+    # ``UserStore`` and ``ProjectStore`` calls. Defaults to ``"local"``
+    # so existing test fixtures don't need updating.
+    user_id: str = "local"
 
 
 def get_cowork_context(tool_context: ToolContext) -> CoworkToolContext:
