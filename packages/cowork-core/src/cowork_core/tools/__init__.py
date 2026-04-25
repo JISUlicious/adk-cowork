@@ -17,6 +17,7 @@ from __future__ import annotations
 from cowork_core.tools.base import (
     COWORK_AUTO_ROUTE_KEY,
     COWORK_CONTEXT_KEY,
+    COWORK_MCP_DISABLED_KEY,
     COWORK_POLICY_MODE_KEY,
     COWORK_PYTHON_EXEC_KEY,
     COWORK_READS_KEY,
@@ -30,6 +31,7 @@ from cowork_core.tools.registry import ToolRegistry
 __all__ = [
     "COWORK_AUTO_ROUTE_KEY",
     "COWORK_CONTEXT_KEY",
+    "COWORK_MCP_DISABLED_KEY",
     "COWORK_POLICY_MODE_KEY",
     "COWORK_PYTHON_EXEC_KEY",
     "COWORK_READS_KEY",

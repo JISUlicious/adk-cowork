@@ -12,6 +12,7 @@ uses to get everything it needs:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -38,6 +39,7 @@ from cowork_core.skills import SkillRegistry, register_skill_tools
 from cowork_core.tools import (
     COWORK_AUTO_ROUTE_KEY,
     COWORK_CONTEXT_KEY,
+    COWORK_MCP_DISABLED_KEY,
     COWORK_POLICY_MODE_KEY,
     COWORK_PYTHON_EXEC_KEY,
     COWORK_SKILLS_ENABLED_KEY,
@@ -150,6 +152,13 @@ class CoworkRuntime:
     # ``/v1/health.mcp`` so Settings can show whether a configured
     # server actually built successfully.
     mcp_status: dict[str, MCPServerStatus] = field(default_factory=dict)
+    # Slice VI — tool name → owning MCP server name. Populated at boot
+    # (via ``asyncio.run``) and refreshed during ``restart_mcp``. The
+    # Slice VI disable callback closes over this dict (by reference)
+    # so a restart that adds/removes servers re-keys the gate without
+    # rebuilding the closure. Tools not in the map are treated as
+    # non-MCP and pass through.
+    mcp_tool_owner: dict[str, str] = field(default_factory=dict)
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -643,7 +652,7 @@ class CoworkRuntime:
         del current[name]
         _save_user_mcp_servers(servers_path, current)
 
-    def restart_mcp(self) -> None:
+    async def restart_mcp(self) -> None:
         """Tear down current MCP toolsets and re-mount from the
         effective config. Replaces ``self.mcp_status`` and the
         runner's root agent in place; ``session_service`` is
@@ -653,11 +662,17 @@ class CoworkRuntime:
         tool list mutates underneath them. The Settings UI confirms
         before calling this. Future: hot-swap without runner
         rebuild — Tier F.
+
+        Async because the per-server tool discovery used by the
+        Slice VI MCP-disable gate awaits ``MCPToolset.get_tools()``.
+        Boot uses ``asyncio.run`` for the same call; here we stay
+        on the route handler's loop.
         """
         # Build a fresh agent + Runner with the new MCP toolsets.
         agent_tools: list[Any] = list(self.tools.as_list())
         effective = _effective_mcp_servers(self.cfg, self.workspace)
         new_status: dict[str, MCPServerStatus] = {}
+        new_owner: dict[str, str] = {}
         for name, mcp_cfg in effective.items():
             toolset, error = build_mcp_toolset(mcp_cfg)
             if toolset is not None:
@@ -665,6 +680,17 @@ class CoworkRuntime:
                 new_status[name] = MCPServerStatus(
                     name=name, status="ok", transport=mcp_cfg.transport,
                 )
+                # Capture tool names so the disable gate knows which
+                # server owns which tool. Best-effort: a server that
+                # connects but fails to list its tools simply isn't
+                # gateable this restart.
+                try:
+                    tools = await toolset.get_tools()
+                    for t in tools:
+                        new_owner[t.name] = name
+                    new_status[name].tool_count = len(tools)
+                except Exception:
+                    pass
             else:
                 new_status[name] = MCPServerStatus(
                     name=name,
@@ -672,11 +698,17 @@ class CoworkRuntime:
                     last_error=error,
                     transport=mcp_cfg.transport,
                 )
+        # Mutate the *existing* dict so the Slice VI callback's
+        # captured reference sees the updated mapping without
+        # rebuilding the closure.
+        self.mcp_tool_owner.clear()
+        self.mcp_tool_owner.update(new_owner)
         new_agent = build_root_agent(
             self.cfg,
             tools=agent_tools,
             skills_snippet=self.skills.injection_snippet(),
             skills=self.skills,
+            mcp_tool_owner=self.mcp_tool_owner,
         )
         # Keep the existing session_service (and therefore live
         # sessions); just give it a new agent. ADK's Runner accepts
@@ -1030,6 +1062,65 @@ class CoworkRuntime:
             return {}
         return {k: bool(v) for k, v in stored.items() if isinstance(k, str)}
 
+    async def set_session_mcp_disabled(
+        self,
+        session_id: str,
+        disabled: list[str],
+        user_id: str = "local",
+    ) -> list[str]:
+        """Persist the per-session MCP-server disable list.
+
+        Slice VI. Servers absent from the list run normally; listed
+        names are silenced — every tool the server owns is blocked
+        with an explanatory error from the disable callback.
+        """
+        if not isinstance(disabled, list):
+            raise ValueError(
+                f"mcp_disabled must be a list, got {type(disabled).__name__}",
+            )
+        normalised: list[str] = []
+        seen: set[str] = set()
+        for name in disabled:
+            if not isinstance(name, str) or not name:
+                raise ValueError(f"server name must be a non-empty string, got {name!r}")
+            if name in seen:
+                continue
+            seen.add(name)
+            normalised.append(name)
+
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+
+        from google.adk.events.event import Event
+        from google.adk.events.event_actions import EventActions
+
+        event = Event(
+            author="cowork-server",
+            invocation_id="",
+            actions=EventActions(state_delta={COWORK_MCP_DISABLED_KEY: normalised}),
+        )
+        await self.runner.session_service.append_event(session, event)
+        return normalised
+
+    async def get_session_mcp_disabled(
+        self,
+        session_id: str,
+        user_id: str = "local",
+    ) -> list[str]:
+        """Return the session's disabled-MCP-server list (default ``[]``)."""
+        session = await self.runner.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        if session is None:
+            raise ValueError(f"no session {session_id}")
+        stored = session.state.get(COWORK_MCP_DISABLED_KEY, [])
+        if not isinstance(stored, list):
+            return []
+        return [s for s in stored if isinstance(s, str)]
+
     async def grant_tool_approval(
         self,
         session_id: str,
@@ -1267,10 +1358,13 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     agent_tools: list[Any] = list(tool_registry.as_list())
     effective_servers = _effective_mcp_servers(cfg, workspace)
     mcp_status: dict[str, MCPServerStatus] = {}
+    mcp_tool_owner: dict[str, str] = {}
+    _mounted_toolsets: list[tuple[str, Any]] = []
     for name, mcp_cfg in effective_servers.items():
         toolset, error = build_mcp_toolset(mcp_cfg)
         if toolset is not None:
             agent_tools.append(toolset)
+            _mounted_toolsets.append((name, toolset))
             mcp_status[name] = MCPServerStatus(
                 name=name, status="ok", transport=mcp_cfg.transport,
             )
@@ -1282,6 +1376,27 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
                 transport=mcp_cfg.transport,
             )
 
+    # Slice VI — discover which MCP server owns which tool name so
+    # the disable gate knows what to block. Boot is sync; we use
+    # ``asyncio.run`` here. If we're unexpectedly inside a running
+    # loop (e.g. an embedded test), fall back silently — the gate
+    # then over-permits, which is safe.
+    if _mounted_toolsets:
+        async def _collect() -> None:
+            for srv, ts in _mounted_toolsets:
+                try:
+                    tools = await ts.get_tools()
+                    for t in tools:
+                        mcp_tool_owner[t.name] = srv
+                    mcp_status[srv].tool_count = len(tools)
+                except Exception:
+                    continue
+
+        try:
+            asyncio.run(_collect())
+        except RuntimeError:
+            pass
+
     agent = build_root_agent(
         cfg,
         tools=agent_tools,
@@ -1291,6 +1406,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         # don't want a registry.
         skills_snippet=skills.injection_snippet(),
         skills=skills,
+        mcp_tool_owner=mcp_tool_owner,
     )
 
     global_dir = workspace.root / "global"
@@ -1334,6 +1450,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         tools=tool_registry,
         runner=runner,
         mcp_status=mcp_status,
+        mcp_tool_owner=mcp_tool_owner,
     )
 
 

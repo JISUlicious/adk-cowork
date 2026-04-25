@@ -317,6 +317,21 @@ class SetSkillsEnabledRequest(BaseModel):
     enabled: dict[str, bool]
 
 
+class McpDisabledResponse(BaseModel):
+    """Per-session list of disabled MCP server names (Slice VI).
+    Empty list = all configured servers enabled. Tools owned by a
+    disabled server are blocked at the ``before_tool_callback``
+    layer with an explanatory error."""
+
+    disabled: list[str]
+
+
+class SetMcpDisabledRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    disabled: list[str]
+
+
 # ── Tag: approvals ─────────────────────────────────────────────────
 
 
@@ -456,6 +471,7 @@ __all__ = [
     "ToolAllowlistResponse", "SetToolAllowlistRequest",
     "AutoRouteResponse", "SetAutoRouteRequest",
     "SkillsEnabledResponse", "SetSkillsEnabledRequest",
+    "McpDisabledResponse", "SetMcpDisabledRequest",
     # approvals
     "GrantApprovalRequest", "GrantApprovalResponse",
     # notifications

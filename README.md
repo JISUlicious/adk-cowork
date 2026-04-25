@@ -235,6 +235,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Skills: 300-char description cap + per-session enable/disable | Core / Server / Settings | wired | Slice II |
 | MCP: stdio + sse + http transports + tool_filter + per-server status | Core / Settings | wired | Slice III |
 | MCP: dynamic config (servers.json) + add / delete / restart routes + Settings UI | Core / Server / Settings | wired | Slice IV |
+| MCP: per-session server enable/disable + tool-level gating callback | Core / Server / Settings | wired | Slice VI |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

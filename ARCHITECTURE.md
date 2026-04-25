@@ -123,6 +123,20 @@ supported in v1: ADK's `Runner` owns the toolset lifecycle and
 mid-call mutations risk stale tool references. The UI confirms
 ("in-flight turns terminate") before calling.
 
+Per-session server gating (Slice VI) layers on top of this. At
+boot — and at every restart — Cowork awaits each toolset's
+`get_tools()` and records the result on
+`runtime.mcp_tool_owner: dict[tool_name, server_name]`. A single
+`make_mcp_disable_callback(mcp_tool_owner)` mounts on every
+agent's `before_tool_callback`; it reads `cowork.mcp_disabled`
+(a `list[str]` of server names) from session state and short-
+circuits any tool whose owning server is in the list with an
+explanatory error. The callback closes over the dict by
+reference, so a `restart_mcp` that re-keys the owner map flows
+through without rebuilding the closure. UI: each MCP server row
+in Settings gets an on/off pill (active session only). Disable
+takes effect on the next tool call — no restart needed.
+
 The same pane → routes mapping is auto-published as an OpenAPI
 schema at `/openapi.json` (Swagger UI at `/docs`, ReDoc at
 `/redoc`). Routes are tagged into the ten groups above; auth uses

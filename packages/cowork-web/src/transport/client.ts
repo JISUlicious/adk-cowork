@@ -420,6 +420,36 @@ export class CoworkClient {
     return ((await r.json()).enabled ?? {}) as Record<string, boolean>;
   }
 
+  /** Per-session list of MCP server names disabled for this session
+   *  (Slice VI). Tools owned by a disabled server are blocked at the
+   *  ``before_tool_callback`` layer with an explanatory error. The
+   *  setting takes effect on the next tool call — no MCP restart
+   *  needed since the gate reads session state every call. */
+  async getSessionMcpDisabled(sessionId: string): Promise<string[]> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/mcp_disabled`,
+      { headers: this.jsonHeaders() },
+    );
+    if (!r.ok) throw new Error(`getSessionMcpDisabled: ${r.status}`);
+    return ((await r.json()).disabled ?? []) as string[];
+  }
+
+  async setSessionMcpDisabled(
+    sessionId: string,
+    disabled: string[],
+  ): Promise<string[]> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/sessions/${sessionId}/policy/mcp_disabled`,
+      {
+        method: "PUT",
+        headers: this.jsonHeaders(),
+        body: JSON.stringify({ disabled }),
+      },
+    );
+    if (!r.ok) throw new Error(`setSessionMcpDisabled: ${r.status}`);
+    return ((await r.json()).disabled ?? []) as string[];
+  }
+
   /**
    * Create a new session.
    *

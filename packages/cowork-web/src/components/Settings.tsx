@@ -567,7 +567,11 @@ function SecTools({
           <AgentStack agents={["researcher", "writer", "analyst", "reviewer"]} size={16} />
         </Field>
       ))}
-      <McpServersBlock client={client} onChanged={refreshHealth} />
+      <McpServersBlock
+        client={client}
+        sessionId={sessionId}
+        onChanged={refreshHealth}
+      />
       <div
         style={{
           display: "flex",
@@ -737,9 +741,11 @@ function SecTools({
  *  ``cowork.toml``) carry the lock icon — delete is gated. */
 function McpServersBlock({
   client,
+  sessionId,
   onChanged,
 }: {
   client: import("../transport/client").CoworkClient;
+  sessionId: string | null;
   onChanged: () => void;
 }) {
   const [records, setRecords] = useState<McpServerRecord[] | null>(null);
@@ -747,6 +753,36 @@ function McpServersBlock({
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [discovered, setDiscovered] = useState<{ name: string; tools: string[] } | null>(null);
+  // Slice VI — per-session MCP disable list. Empty = all enabled
+  // (default). Loaded once per session change; the row toggle does
+  // an optimistic flip + PUT, with revert on failure.
+  const [mcpDisabled, setMcpDisabled] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setMcpDisabled([]);
+      return;
+    }
+    client
+      .getSessionMcpDisabled(sessionId)
+      .then(setMcpDisabled)
+      .catch(() => setMcpDisabled([]));
+  }, [client, sessionId]);
+
+  const isMcpEnabled = (name: string) => !mcpDisabled.includes(name);
+  const toggleMcpEnabled = async (name: string) => {
+    if (!sessionId) return;
+    const next = mcpDisabled.includes(name)
+      ? mcpDisabled.filter((s) => s !== name)
+      : [...mcpDisabled, name];
+    setMcpDisabled(next);
+    try {
+      const applied = await client.setSessionMcpDisabled(sessionId, next);
+      setMcpDisabled(applied);
+    } catch {
+      setMcpDisabled(mcpDisabled);
+    }
+  };
 
   const refresh = () => {
     client
@@ -900,8 +936,33 @@ function McpServersBlock({
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 8,
+                opacity: isMcpEnabled(server.name) ? 1 : 0.55,
               }}
             >
+              <button
+                type="button"
+                onClick={() => sessionId && void toggleMcpEnabled(server.name)}
+                disabled={!sessionId}
+                title={
+                  !sessionId
+                    ? "Open a session to toggle"
+                    : isMcpEnabled(server.name)
+                      ? "Disable for this session — tools blocked at the agent layer"
+                      : "Re-enable for this session"
+                }
+                style={{
+                  fontSize: "var(--fs-xs)",
+                  fontFamily: "var(--mono)",
+                  padding: "1px 6px",
+                  borderRadius: "var(--radius-sm)",
+                  border: "1px solid var(--line)",
+                  background: isMcpEnabled(server.name) ? "var(--paper)" : "var(--paper-2)",
+                  color: isMcpEnabled(server.name) ? "var(--ok, #2a7)" : "var(--ink-4)",
+                  cursor: sessionId ? "pointer" : "not-allowed",
+                }}
+              >
+                {isMcpEnabled(server.name) ? "on" : "off"}
+              </button>
               <span
                 title={
                   status.status === "error"

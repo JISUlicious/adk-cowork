@@ -32,6 +32,7 @@ from google.adk.tools.tool_context import ToolContext
 from cowork_core.config import PolicyConfig
 from cowork_core.tools.base import (
     COWORK_CONTEXT_KEY,
+    COWORK_MCP_DISABLED_KEY,
     COWORK_POLICY_MODE_KEY,
     COWORK_PYTHON_EXEC_KEY,
     COWORK_TOOL_ALLOWLIST_KEY,
@@ -205,6 +206,49 @@ def make_allowlist_callback(agent_name: str) -> Any:
             "error": (
                 f"Tool '{tool.name}' not allowed for agent "
                 f"'{agent_name}' this session."
+            ),
+        }
+
+    return _check
+
+
+def make_mcp_disable_callback(tool_owner: dict[str, str]) -> Any:
+    """Return a ``before_tool_callback`` that blocks tools owned by
+    MCP servers disabled for the current session.
+
+    Slice VI. ``tool_owner`` is a mapping from MCP tool name to the
+    server name that owns it, captured during ``build_runtime`` /
+    ``restart_mcp`` by listing each toolset's tools. The session's
+    disable list lives on
+    ``tool_context.state[COWORK_MCP_DISABLED_KEY]`` as ``list[str]``;
+    absent / empty = all servers enabled (the default). Tools whose
+    ``name`` is not in ``tool_owner`` are not MCP tools and pass
+    through untouched, so this callback is safe to mount on every
+    agent.
+
+    The closure captures the same dict object the runtime updates,
+    so a ``restart_mcp`` that adds/removes servers re-keys the gate
+    without rebuilding the callback. We never copy the dict in.
+    """
+
+    def _check(
+        tool: BaseTool,
+        _args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> dict[str, Any] | None:
+        owner = tool_owner.get(tool.name)
+        if owner is None:
+            return None
+        disabled = tool_context.state.get(COWORK_MCP_DISABLED_KEY, [])
+        if not isinstance(disabled, list):
+            return None
+        if owner not in disabled:
+            return None
+        return {
+            "error": (
+                f"MCP server '{owner}' is disabled for this session. "
+                f"Re-enable it in Settings → MCP servers to call "
+                f"'{tool.name}'."
             ),
         }
 

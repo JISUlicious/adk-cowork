@@ -76,7 +76,9 @@ from cowork_server.api_models import (
     SendMessageRequest,
     SessionInfo,
     SessionListItem,
+    McpDisabledResponse,
     SetAutoRouteRequest,
+    SetMcpDisabledRequest,
     SetPolicyModeRequest,
     SetPythonExecRequest,
     SetSkillsEnabledRequest,
@@ -478,6 +480,53 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=400, detail=message) from exc
         return {"enabled": applied}
 
+    @app.get(
+        "/v1/sessions/{session_id}/policy/mcp_disabled",
+        tags=["policy"],
+        summary="Get the per-session disabled-MCP-server list",
+        response_model=McpDisabledResponse,
+    )
+    async def get_session_mcp_disabled_policy(
+        session_id: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, list[str]]:
+        """Slice VI — return the list of MCP server names disabled
+        for this session. Empty list = all configured servers
+        enabled. Tools owned by a listed server are blocked with an
+        explanatory error from the disable callback."""
+        try:
+            disabled = await runtime.get_session_mcp_disabled(
+                session_id=session_id, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"disabled": disabled}
+
+    @app.put(
+        "/v1/sessions/{session_id}/policy/mcp_disabled",
+        tags=["policy"],
+        summary="Set the per-session disabled-MCP-server list",
+        response_model=McpDisabledResponse,
+    )
+    async def set_session_mcp_disabled_policy(
+        session_id: str,
+        body: SetMcpDisabledRequest,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, list[str]]:
+        """Replace the session's disabled-MCP-server list. Takes
+        effect on the next tool call — no restart needed (the
+        disable callback reads session state every call)."""
+        try:
+            applied = await runtime.set_session_mcp_disabled(
+                session_id=session_id, disabled=body.disabled, user_id=user.user_id,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if message.startswith("no session"):
+                raise HTTPException(status_code=404, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {"disabled": applied}
+
     # ── Per-session tool approvals ─────────────────────────────────────
 
     @app.get(
@@ -808,7 +857,7 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         sessions stay reachable. **In-flight turns terminate** when
         the agent's tool list mutates underneath them — Settings
         confirms before calling this."""
-        runtime.restart_mcp()
+        await runtime.restart_mcp()
         return {
             "servers": [_status_payload(s) for s in runtime.mcp_status.values()],
         }

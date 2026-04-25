@@ -249,7 +249,7 @@ Slice V — MCP docs + Settings preset dropdown (commit f9b4be8):
 - update README.md Documentation section — link to docs/MCP.md
 - update SPEC.md §2.13 M3 — tick MCP adapter milestone (Slices III + IV); footnote pointing at docs/MCP.md for the npx-based filesystem worked example (cull-audit decision: do not bundle a Cowork-specific FS MCP server)
 
-Slice II — skills safety + per-session enable/disable (this commit):
+Slice II — skills safety + per-session enable/disable (commit db1f00f):
 - update cowork_core/skills/loader.py — add `DESCRIPTION_PROMPT_CAP = 300`; `injection_snippet` caps per-skill description at the cap (with `…` ellipsis) and accepts an optional `enabled` predicate that omits disabled skills entirely
 - update cowork_core/agents/root_agent.py — `_dynamic_instruction` reads `cowork.skills_enabled` from session state and threads a closure into `injection_snippet`
 - update cowork_core/skills/load_skill_tool.py — refuse disabled skills at the tool layer with an explanatory error so the gate holds even if the model guesses the name
@@ -261,3 +261,17 @@ Slice II — skills safety + per-session enable/disable (this commit):
 - update SPEC.md §2.5.1 — note the prompt-side description cap and per-session enable gate
 - update ARCHITECTURE.md — extend skills paragraph with the cap + predicate
 - update README.md — new feature row "Skills: 300-char description cap + per-session enable/disable"
+
+Slice VI — per-session MCP server gating (this commit):
+- add COWORK_MCP_DISABLED_KEY (`cowork.mcp_disabled`, list[str]) — server names silenced for the session; absent / empty = all enabled
+- add CoworkRuntime.mcp_tool_owner: dict[tool_name, server_name] — populated at boot via asyncio.run + during async restart_mcp via await; survives restart by mutating in place so the disable callback's closure stays valid
+- convert CoworkRuntime.restart_mcp to async — boot stays synchronous via asyncio.run; the route handler awaits restart so tool discovery runs on the same loop without nesting
+- add CoworkRuntime.set_session_mcp_disabled / get_session_mcp_disabled with input validation (list[str], dedupe, reject non-strings)
+- add cowork_core/policy/permissions.py make_mcp_disable_callback(tool_owner) — single closure mounted on every agent's before_tool_callback that reads session state per-call and blocks owned tools when the server is in the disable list
+- thread mcp_tool_owner through build_runtime → build_root_agent; sub-agent + root callback chains both gain the gate (light test harnesses that pass mcp_tool_owner=None skip it)
+- add McpDisabledResponse + SetMcpDisabledRequest to api_models.py + GET/PUT /v1/sessions/{id}/policy/mcp_disabled routes
+- add cowork-web client methods getSessionMcpDisabled / setSessionMcpDisabled
+- add Settings → MCP servers per-row on/off toggle (active session only) — disable takes effect on next tool call, no restart needed
+- update tests/test_mcp.py — convert test_restart_rebuilds_status to async; add 2 new tests (callback gating logic, session state round-trip + validation); 14 total in test_mcp.py, 236 overall
+- update README.md — new feature row for Slice VI
+- update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring

@@ -164,7 +164,8 @@ def test_delete_unknown_returns_404_via_route(tmp_path: Path) -> None:
     assert r.status_code == 404
 
 
-def test_restart_rebuilds_status(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_restart_rebuilds_status(tmp_path: Path) -> None:
     """``restart_mcp`` re-mounts toolsets from the *current*
     effective config, so a server saved after boot shows up in the
     status dict after restart."""
@@ -178,7 +179,7 @@ def test_restart_rebuilds_status(tmp_path: Path) -> None:
     # Save alone doesn't update mcp_status — restart does.
     assert "added" not in runtime.mcp_status
 
-    runtime.restart_mcp()
+    await runtime.restart_mcp()
     assert "added" in runtime.mcp_status
     assert runtime.mcp_status["added"].status == "ok"
 
@@ -213,3 +214,75 @@ def test_health_payload_includes_mcp_status(tmp_path: Path) -> None:
     assert mcp["broken"]["status"] == "error"
     assert mcp["broken"]["transport"] == "sse"
     assert "url" in (mcp["broken"]["last_error"] or "")
+
+
+# ─────────────────── Slice VI — per-session MCP gating ───────────────────
+
+
+def test_mcp_disable_callback_blocks_owned_tools() -> None:
+    """The Slice VI callback returns an error dict for tools whose
+    owning server is in ``cowork.mcp_disabled``, and passes through
+    otherwise. This is the unit test for the gate logic — a higher-
+    level test would need a real MCP subprocess."""
+    from unittest.mock import MagicMock
+
+    from cowork_core.policy.permissions import make_mcp_disable_callback
+    from cowork_core.tools.base import COWORK_MCP_DISABLED_KEY
+
+    owner = {"read_file": "fs", "list_dir": "fs", "echo": "memory"}
+    cb = make_mcp_disable_callback(owner)
+
+    # Disabled server → blocked with explanatory error.
+    fake_ctx = MagicMock()
+    fake_ctx.state = {COWORK_MCP_DISABLED_KEY: ["fs"]}
+    tool = MagicMock()
+    tool.name = "read_file"
+    out = cb(tool, {}, fake_ctx)
+    assert out is not None
+    assert "fs" in out["error"]
+    assert "disabled" in out["error"].lower()
+
+    # Tool from a non-disabled server → pass through.
+    tool.name = "echo"
+    assert cb(tool, {}, fake_ctx) is None
+
+    # Empty disable list → all pass through.
+    fake_ctx.state = {COWORK_MCP_DISABLED_KEY: []}
+    tool.name = "read_file"
+    assert cb(tool, {}, fake_ctx) is None
+
+    # Non-MCP tool (not in owner map) → pass through regardless.
+    fake_ctx.state = {COWORK_MCP_DISABLED_KEY: ["fs"]}
+    tool.name = "fs_read"
+    assert cb(tool, {}, fake_ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_session_mcp_disabled_round_trips(tmp_path: Path) -> None:
+    """``set_session_mcp_disabled`` persists via session state and
+    ``get_session_mcp_disabled`` reads it back. Mirror of the
+    skills_enabled test — same OCC-safe append pattern."""
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+
+    project = runtime.registry_for("local").create("Tango")
+    _, _, sid = await runtime.open_session(user_id="local", project_name="Tango")
+    assert project.name == "Tango"
+
+    # Default — no overrides.
+    assert await runtime.get_session_mcp_disabled(sid) == []
+
+    applied = await runtime.set_session_mcp_disabled(sid, ["alpha", "beta"])
+    assert applied == ["alpha", "beta"]
+    assert await runtime.get_session_mcp_disabled(sid) == ["alpha", "beta"]
+
+    # Dedupe + reject non-string entries.
+    applied = await runtime.set_session_mcp_disabled(sid, ["alpha", "alpha"])
+    assert applied == ["alpha"]
+
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError, match="non-empty"):
+        await runtime.set_session_mcp_disabled(sid, [""])
+    with _pytest.raises(ValueError, match="must be a list"):
+        await runtime.set_session_mcp_disabled(sid, "not-a-list")  # type: ignore[arg-type]

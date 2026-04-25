@@ -51,6 +51,14 @@ COWORK_AUTO_ROUTE_KEY = "cowork.auto_route"
 # Slice II.
 COWORK_SKILLS_ENABLED_KEY = "cowork.skills_enabled"
 
+# Per-session ``list[str]`` — names of MCP servers disabled this
+# session. Absent / empty list = all configured servers enabled.
+# Mirrors Claude Code's settings-level ``disabledMcpServers`` but
+# scoped per-session because Cowork runs concurrent sessions on
+# one process. Tools owned by a disabled server are blocked at the
+# ``before_tool_callback`` layer with an explanatory error. Slice VI.
+COWORK_MCP_DISABLED_KEY = "cowork.mcp_disabled"
+
 
 @dataclass(frozen=True)
 class CoworkToolContext:

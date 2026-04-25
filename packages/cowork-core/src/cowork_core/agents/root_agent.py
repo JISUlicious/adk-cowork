@@ -28,6 +28,7 @@ from cowork_core.model.openai_compat import build_model
 from cowork_core.policy.hooks import make_audit_callbacks
 from cowork_core.policy.permissions import (
     make_allowlist_callback,
+    make_mcp_disable_callback,
     make_permission_callback,
 )
 from cowork_core.tools.base import (
@@ -250,6 +251,7 @@ def build_root_agent(
     tools: Sequence[BaseTool] | None = None,
     skills_snippet: str = "",
     skills: Any = None,
+    mcp_tool_owner: dict[str, str] | None = None,
 ) -> LlmAgent:
     # Dynamic instruction — resolved per turn so the working-context paragraph
     # reflects the session's ExecEnv and the policy-mode addendum reflects
@@ -299,16 +301,32 @@ def build_root_agent(
     permission_cb = make_permission_callback(cfg.policy)
     audit_before, audit_after = make_audit_callbacks()
     before_model_cb, after_model_cb = make_model_callbacks()
+    # Slice VI — single MCP-disable callback closes over the runtime's
+    # ``mcp_tool_owner`` map (populated at boot + restart). Mounted on
+    # every agent so a disabled server's tools are blocked uniformly.
+    # When ``mcp_tool_owner`` is None (light test harnesses) we skip
+    # the callback entirely.
+    mcp_disable_cb = (
+        make_mcp_disable_callback(mcp_tool_owner)
+        if mcp_tool_owner is not None
+        else None
+    )
+
+    def _with_mcp(callbacks: list[Any]) -> list[Any]:
+        return [mcp_disable_cb, *callbacks] if mcp_disable_cb is not None else callbacks
+
     # Root is unrestricted by the allowlist by design — the feature
     # scopes specialist sub-agents, not the primary interlocutor. Each
     # sub-agent gets its own allowlist closure so the callback can
     # know "which agent am I guarding" without reaching into ADK's
     # private ``InvocationContext``.
-    root_before_tool_cbs = [permission_cb, audit_before]
+    root_before_tool_cbs = _with_mcp([permission_cb, audit_before])
     after_tool_cbs = [audit_after]
 
     def _sub_before_tool(name: str) -> list[Any]:
-        return [make_allowlist_callback(name), permission_cb, audit_before]
+        return _with_mcp(
+            [make_allowlist_callback(name), permission_cb, audit_before],
+        )
 
     # Sub-agents share the same model and tools; callbacks add a
     # per-agent allowlist check as the first gate.
