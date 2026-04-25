@@ -345,12 +345,62 @@ class CoworkRuntime:
         atomically (via a temp dir + rename), so a validation error
         leaves the existing skill tree untouched.
         """
+        import shutil
+
+        # Stage + validate. Returns a parsed ``Skill`` whose ``root``
+        # points into the staging dir; we still need to commit by
+        # renaming the inner ``<top>/`` over the final location.
+        staging, parsed, top = self._validate_and_stage_zip(data)
+        try:
+            dest_root = _user_skills_dir(self.workspace)
+            dest_root.mkdir(parents=True, exist_ok=True)
+            final_dir = dest_root / top
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+            (staging / top).rename(final_dir)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+
+        self.reload_skills()
+        installed = self.skills._skills.get(top)
+        if installed is None:
+            # Defensive — reload_skills should have re-picked it up.
+            raise SkillInstallError(
+                f"installed skill {top!r} did not reappear in registry",
+            )
+        return installed
+
+    def validate_skill_zip(self, data: bytes) -> "Skill":
+        """Dry-run install validation without writing to the
+        user-skills directory. Returns the parsed ``Skill`` on
+        success; raises ``SkillInstallError`` on any check failure.
+        Used by ``POST /v1/skills/validate`` so devs writing skills
+        can confirm a zip is acceptable before committing it.
+        """
+        import shutil
+
+        staging, parsed, _ = self._validate_and_stage_zip(data)
+        try:
+            return parsed
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging, ignore_errors=True)
+
+    def _validate_and_stage_zip(
+        self, data: bytes,
+    ) -> tuple[Path, "Skill", str]:
+        """Shared install/validate pipeline. Stages the zip into a
+        temp dir, runs every check, and returns
+        ``(staging_path, parsed_skill, top_name)``. Callers are
+        responsible for either renaming ``staging / top`` over the
+        final destination (install) or rmtree'ing the staging dir
+        (validate / rollback)."""
         import io
         import shutil
-        import tempfile
         import uuid
         import zipfile
-        from cowork_core.skills import Skill, SkillLoadError, parse_skill_md
+        from cowork_core.skills import SkillLoadError, parse_skill_md
 
         max_zip_bytes = 5 * 1024 * 1024        # 5 MB archive cap
         max_extracted_bytes = 10 * 1024 * 1024  # 10 MB total
@@ -376,8 +426,6 @@ class CoworkRuntime:
                 f"too many entries: {len(members)} (max {max_entries})",
             )
 
-        # Validate member names + compute total uncompressed size
-        # before extraction (zip-bomb guard).
         top_names: set[str] = set()
         total_size = 0
         for m in members:
@@ -386,7 +434,6 @@ class CoworkRuntime:
                 raise SkillInstallError(f"unsafe path in archive: {n!r}")
             if not n:
                 raise SkillInstallError("empty member name")
-            # Zip slip: reject backslashes on Windows too.
             if "\\" in n:
                 raise SkillInstallError(f"unsafe path in archive: {n!r}")
             first = Path(n).parts[0]
@@ -405,9 +452,6 @@ class CoworkRuntime:
         top = next(iter(top_names))
         _validate_skill_name(top)
 
-        # Collision with bundled skills is always rejected; collision
-        # with an existing user skill replaces it (same semantics as
-        # the scan-last-wins rule).
         existing = self.skills._skills.get(top)
         if existing is not None and existing.source == "bundled":
             raise SkillInstallError(
@@ -416,10 +460,6 @@ class CoworkRuntime:
 
         dest_root = _user_skills_dir(self.workspace)
         dest_root.mkdir(parents=True, exist_ok=True)
-        final_dir = dest_root / top
-        # Extract into a uniquely-named staging dir under the same
-        # parent, then rename over the final path. Any exception
-        # before the rename leaves the final tree alone.
         staging = dest_root / f".install-{uuid.uuid4().hex[:12]}"
         try:
             staging.mkdir(parents=True)
@@ -438,24 +478,11 @@ class CoworkRuntime:
                     f"frontmatter name {parsed.name!r} does not match "
                     f"archive directory {top!r}",
                 )
-            # Atomic swap: remove any existing user-install then rename.
-            if final_dir.exists():
-                shutil.rmtree(final_dir)
-            (staging / top).rename(final_dir)
-        finally:
+        except Exception:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
-
-        self.reload_skills()
-        # Return the installed skill by re-reading from the live
-        # registry so callers see the final mounted location.
-        installed = self.skills._skills.get(top)
-        if installed is None:
-            # Defensive — reload_skills should have re-picked it up.
-            raise SkillInstallError(
-                f"installed skill {top!r} did not reappear in registry",
-            )
-        return installed
+            raise
+        return staging, parsed, top
 
     def uninstall_skill(self, name: str) -> None:
         """Remove a user-installed skill from

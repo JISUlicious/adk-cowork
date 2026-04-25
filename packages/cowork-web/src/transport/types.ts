@@ -84,12 +84,17 @@ export interface CompactionSettings {
 /** One entry in the health payload's ``skills`` list. Mirrors
  *  ``cowork_server.api_models.SkillInfo`` server-side. ``source``
  *  discriminates where the skill came from; only ``"user"`` skills
- *  are uninstallable via ``DELETE /v1/skills/{name}``. */
+ *  are uninstallable via ``DELETE /v1/skills/{name}``. ``version``,
+ *  ``triggers``, and ``content_hash`` come from optional frontmatter
+ *  fields surfaced for transparency (Slice I). */
 export interface SkillInfo {
   name: string;
   description: string;
   license: string;
   source: "bundled" | "user" | "project" | "workdir";
+  version?: string;
+  triggers?: string[];
+  content_hash?: string;
 }
 
 export interface HealthInfo {

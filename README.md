@@ -231,6 +231,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Skills: project-scoped override | Core | wired | Slice A T1 |
 | Settings → Skills (name + description + license) | Settings | wired | Slice A T2 |
 | Skills: install / uninstall UX (.zip) | Settings | wired | Slice B |
+| Skills: version + triggers + content_hash + validate route | Server / Settings | wired | Slice I |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |
@@ -284,6 +285,7 @@ multi-user mode) to unlock "Try it out" calls.
 - [Implementation plan](PLAN.md) -- milestones and sub-tasks
 - [Constitution](CONSTITUTION.md) -- project rules
 - [File index](INDEX.md) -- every file with a one-liner
+- [Writing a skill](docs/WRITING_A_SKILL.md) -- frontmatter, layout, install, troubleshooting
 - [Changelog](CHANGELOG.md) -- append-only change log
 
 ## License

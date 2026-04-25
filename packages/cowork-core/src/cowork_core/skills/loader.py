@@ -16,6 +16,7 @@ Collision policy: project-scoped skills shadow global ones with the same
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -46,6 +47,15 @@ class Skill:
     root: Path
     frontmatter: dict[str, Any] = field(default_factory=dict)
     source: SkillSource = "bundled"
+    # Optional frontmatter fields. Permissive defaults so skills
+    # written for Claude Code (where these aren't required) round-
+    # trip cleanly through Cowork's parser.
+    version: str = "0.0.0"
+    triggers: list[str] = field(default_factory=list)
+    # SHA-256 of the SKILL.md bytes at scan time, lower-case hex.
+    # Surfaced to the UI so users can see what they actually have
+    # on disk vs. what was originally installed.
+    content_hash: str = ""
 
     @property
     def skill_md(self) -> Path:
@@ -80,10 +90,20 @@ def parse_skill_md(path: Path, source: SkillSource = "bundled") -> Skill:
     user-writable location (``<workspace>/global/skills/``) pass
     ``"user"`` so the uninstall flow can find it; the default
     matches the common case of bundled package assets.
+
+    Required frontmatter: ``name``, ``description``. Optional
+    fields recognised: ``license`` (default ``"unspecified"``),
+    ``version`` (default ``"0.0.0"``), ``triggers`` (default
+    ``[]``). Unknown fields stay in ``frontmatter`` untouched —
+    skills authored for Claude Code round-trip cleanly. All
+    string-typed fields are scanned for non-printable / control
+    characters as a prompt-injection guard; offending values are
+    rejected outright.
     """
     if not path.is_file():
         raise SkillLoadError(f"not a file: {path}")
-    text = path.read_text(encoding="utf-8")
+    raw = path.read_bytes()
+    text = raw.decode("utf-8", errors="strict")
     fm, _body = _split_frontmatter(text, path)
     name = fm.get("name")
     description = fm.get("description")
@@ -94,6 +114,24 @@ def parse_skill_md(path: Path, source: SkillSource = "bundled") -> Skill:
     license_val = fm.get("license") or "unspecified"
     if not isinstance(license_val, str):
         raise SkillLoadError(f"'license' must be a string in {path}")
+    version = fm.get("version", "0.0.0")
+    if not isinstance(version, str):
+        raise SkillLoadError(f"'version' must be a string in {path}")
+    triggers_raw = fm.get("triggers", [])
+    if not isinstance(triggers_raw, list) or not all(
+        isinstance(t, str) for t in triggers_raw
+    ):
+        raise SkillLoadError(f"'triggers' must be a list of strings in {path}")
+    for value, label in (
+        (name, "name"),
+        (description, "description"),
+        (license_val, "license"),
+        (version, "version"),
+    ):
+        _reject_non_printable(value, label, path)
+    for t in triggers_raw:
+        _reject_non_printable(t, "triggers entry", path)
+    content_hash = hashlib.sha256(raw).hexdigest()
     return Skill(
         name=name,
         description=description,
@@ -101,7 +139,28 @@ def parse_skill_md(path: Path, source: SkillSource = "bundled") -> Skill:
         root=path.parent,
         frontmatter=fm,
         source=source,
+        version=version,
+        triggers=list(triggers_raw),
+        content_hash=content_hash,
     )
+
+
+def _reject_non_printable(value: str, label: str, path: Path) -> None:
+    """Disallow control characters in user-visible string values.
+
+    Defence against a malicious zip whose frontmatter description
+    embeds a newline + injected directives the model might honor
+    when the description is rendered into the root prompt.
+    Whitespace inside the string (regular spaces) is fine; what we
+    reject are codepoints below 0x20 other than tab (handled
+    leniently — YAML strips most of these anyway, but be explicit).
+    """
+    for ch in value:
+        if ord(ch) < 0x20 and ch not in ("\t",):
+            raise SkillLoadError(
+                f"control character in {label!r} of {path}: "
+                f"U+{ord(ch):04X} not permitted",
+            )
 
 
 @dataclass

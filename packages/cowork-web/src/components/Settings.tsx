@@ -606,6 +606,21 @@ function SecTools({
                   gap: 8,
                 }}
               >
+                {s.version && s.version !== "0.0.0" && (
+                  <span
+                    style={{
+                      color: "var(--ink-3)",
+                      fontSize: "var(--fs-xs)",
+                      fontFamily: "var(--mono)",
+                      padding: "1px 6px",
+                      border: "1px solid var(--line)",
+                      borderRadius: "var(--radius-sm)",
+                    }}
+                    title={`Skill version${s.content_hash ? ` · sha256:${s.content_hash.slice(0, 12)}…` : ""}`}
+                  >
+                    v{s.version}
+                  </span>
+                )}
                 <span
                   style={{
                     color: "var(--ink-4)",

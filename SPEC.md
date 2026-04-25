@@ -225,8 +225,20 @@ A **skill** is a filesystem bundle the agent loads on demand. Cowork adopts Anth
 name: docx-basic
 description: "Use when the user wants to read, write, or edit .docx files..."
 license: MIT
+version: 0.1.0     # optional, free-form; defaults to "0.0.0"
+triggers:          # optional; surfaced to the user, not to the model
+  - docx
 ---
 ```
+
+`name` and `description` are required; `license`, `version`, and
+`triggers` are optional and accepted only as a permissive parse —
+skills authored for Claude Code (which doesn't write these) round-
+trip cleanly. Cowork additionally records a SHA-256 of each
+`SKILL.md` at scan time as `content_hash`, surfaced via
+`/v1/health.skills` and Settings so users can confirm a skill on
+disk matches what they installed. See `docs/WRITING_A_SKILL.md`
+for a longer treatment.
 
 Only `name` + `description` are injected into the root agent's system prompt (a registry line). The body is loaded into context only when the agent calls `load_skill("docx-basic")`. This is the Claude Code skills pattern and keeps system prompts small even with many skills installed.
 
@@ -478,7 +490,7 @@ expected — surfaces already go through the protocols.
 4. **M3 — Multi-agent + MCP (1 wk)**: researcher / writer / analyst / reviewer sub-agents; permission modes; hooks; MCP tool adapter (first integration target = a local-files MCP server). Skill loader already lives in M1.
 5. **M4 — Desktop app (2 wk)**: `cowork-app` Tauri shell, sidecar launcher, embedded Python runtime, **unsigned dev builds** for Windows/macOS/Linux via GitHub Releases, Tauri updater wired to the same feed.
 6. **M5 — Email + confirm flow (1 wk)**: `email.draft` + `email.send` with confirm-gated dispatch end-to-end; SMTP config; begin Gmail via MCP.
-7. **M6 — Hardening (ongoing)**: cross-platform CI matrix green, audit log, session export, docs for writing a tool / sub-agent / skill.
+7. **M6 — Hardening (ongoing)**: cross-platform CI matrix green, audit log, session export, docs for writing a tool / sub-agent / skill (skill docs at [`docs/WRITING_A_SKILL.md`](docs/WRITING_A_SKILL.md) — Slice I).
 
 Hosted mode, code-signing, and auth are explicitly **post-v0.1** and tracked as separate tracks.
 

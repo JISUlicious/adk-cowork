@@ -63,6 +63,24 @@ ws.append(["Bob", 150, 175, "=B3+C3"])
 wb.save("scratch/output.xlsx")
 ```
 
+## Reusable helpers (`scripts/table_io.py`)
+
+This skill ships small wrappers for the most common read / write
+patterns: sheet-by-name or by-index, multi-sheet writes, single-
+cell reads (with `data_only=True` so stored formula values come
+through). Inline the file's contents into a `python_exec_run`
+call — the sandbox can't import from outside the scratch dir.
+
+```python
+{{table_io.py contents}}
+
+df = read_table("scratch/sales.xlsx", sheet="Q1", columns=["product", "units"])
+write_tables({"Q1": df.head(10), "summary": df.describe()}, "scratch/report.xlsx")
+```
+
+Use `load_skill("xlsx-basic")["scripts"]` to confirm the file is
+present and `fs_read` to pull its body when you want to inline.
+
 ## Notes
 
 - Use `python_exec_run` with these snippets. Both `openpyxl` and `pandas` are available.

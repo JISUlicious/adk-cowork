@@ -48,6 +48,7 @@ from cowork_server.api_models import (
     GrantApprovalResponse,
     HealthResponse,
     InstallSkillResult,
+    ValidateSkillResult,
     LocalFileListResult,
     LocalFileReadResult,
     LocalSessionListItem,
@@ -200,6 +201,9 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                     "description": s.description,
                     "license": s.license,
                     "source": s.source,
+                    "version": s.version,
+                    "triggers": list(s.triggers),
+                    "content_hash": s.content_hash,
                 }
                 for s in runtime.skills.all_skills()
             ],
@@ -550,6 +554,43 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
             "description": installed.description,
             "license": installed.license,
             "source": installed.source,
+            "version": installed.version,
+            "triggers": list(installed.triggers),
+            "content_hash": installed.content_hash,
+        }
+
+    @app.post(
+        "/v1/skills/validate",
+        tags=["skills"],
+        summary="Dry-run install validation for a skill zip",
+        response_model=ValidateSkillResult,
+    )
+    async def validate_skill(
+        file: UploadFile = File(...),
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        """Run the same validation pipeline as ``POST /v1/skills`` —
+        zip-bomb caps, path-traversal rejection, frontmatter parse,
+        bundled-collision check, name-vs-frontmatter match — but
+        roll back the staging dir instead of committing. Returns
+        the parsed ``SkillInfo`` on success; any validation failure
+        returns 400 with the exception message."""
+        try:
+            data = await file.read()
+        finally:
+            await file.close()
+        try:
+            parsed = runtime.validate_skill_zip(data)
+        except SkillInstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "name": parsed.name,
+            "description": parsed.description,
+            "license": parsed.license,
+            "source": parsed.source,
+            "version": parsed.version,
+            "triggers": list(parsed.triggers),
+            "content_hash": parsed.content_hash,
         }
 
     @app.delete(

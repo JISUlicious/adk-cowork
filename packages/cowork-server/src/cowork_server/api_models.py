@@ -37,19 +37,32 @@ class SkillInfo(BaseModel):
     lets the UI surface Cowork's MIT default vs. user-installed
     third-party skills at a glance. ``source`` discriminates where
     the skill came from; Settings uses it to disable the uninstall
-    affordance on bundled skills.
+    affordance on bundled skills. ``version``, ``triggers``, and
+    ``content_hash`` are optional frontmatter fields surfaced for
+    transparency (Slice I).
     """
 
     name: str
     description: str
     license: str
     source: str = "bundled"
+    version: str = "0.0.0"
+    triggers: list[str] = Field(default_factory=list)
+    content_hash: str = ""
 
 
 class InstallSkillResult(SkillInfo):
     """Return shape for ``POST /v1/skills``. Identical to
     ``SkillInfo``; a separate model keeps the Swagger example on
     the install route obvious."""
+
+
+class ValidateSkillResult(SkillInfo):
+    """Return shape for ``POST /v1/skills/validate``. Same fields
+    as ``SkillInfo`` — validation runs the install pipeline through
+    the staging step but rolls back instead of committing, so the
+    parsed metadata is identical to what install would have produced.
+    """
 
 
 class DeleteSkillResult(BaseModel):
@@ -319,7 +332,7 @@ class PatchLocalSessionRequest(BaseModel):
 __all__ = [
     # health + skills
     "CompactionInfo", "HealthResponse", "SkillInfo",
-    "InstallSkillResult", "DeleteSkillResult",
+    "InstallSkillResult", "ValidateSkillResult", "DeleteSkillResult",
     # projects
     "ProjectInfo", "CreateProjectRequest", "DeleteResponse",
     # sessions

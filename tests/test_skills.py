@@ -147,6 +147,115 @@ def test_load_skill_unknown(tmp_path: Path) -> None:
     assert "error" in out
 
 
+def test_parse_version_and_triggers(tmp_path: Path) -> None:
+    """Optional frontmatter fields land on the Skill dataclass."""
+    p = tmp_path / "SKILL.md"
+    p.write_text(
+        "---\n"
+        "name: hello\n"
+        'description: "use for hello"\n'
+        "license: MIT\n"
+        "version: 1.2.3\n"
+        "triggers:\n  - foo\n  - bar\n"
+        "---\nbody\n",
+        encoding="utf-8",
+    )
+    skill = parse_skill_md(p)
+    assert skill.version == "1.2.3"
+    assert skill.triggers == ["foo", "bar"]
+    # content_hash is the SHA-256 of the SKILL.md bytes, lowercase hex.
+    assert len(skill.content_hash) == 64
+    assert all(c in "0123456789abcdef" for c in skill.content_hash)
+
+
+def test_parse_rejects_non_printable_in_description(tmp_path: Path) -> None:
+    """Prompt-injection guard: control chars in user-visible string
+    fields are rejected outright."""
+    p = tmp_path / "SKILL.md"
+    p.write_text(
+        '---\nname: hello\ndescription: "line1\\nline2"\nlicense: MIT\n---\nbody\n',
+        encoding="utf-8",
+    )
+    # YAML's double-quoted string interprets \n as a real newline,
+    # which is U+000A — the parser must reject it.
+    with pytest.raises(SkillLoadError, match="control character"):
+        parse_skill_md(p)
+
+
+def test_parse_rejects_invalid_triggers_type(tmp_path: Path) -> None:
+    p = tmp_path / "SKILL.md"
+    p.write_text(
+        '---\nname: hello\ndescription: "x"\ntriggers: not-a-list\n---\nbody\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(SkillLoadError, match="triggers"):
+        parse_skill_md(p)
+
+
+def test_validate_skill_zip_dry_run(tmp_path: Path) -> None:
+    """``runtime.validate_skill_zip`` runs the full validation
+    pipeline but does NOT write to ``<workspace>/global/skills/``.
+    Used by ``POST /v1/skills/validate``."""
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+
+    parsed = runtime.validate_skill_zip(_zip_skill("dryrun"))
+    assert parsed.name == "dryrun"
+    # Nothing landed in the user skills dir.
+    assert not (tmp_path / "global" / "skills" / "dryrun").exists()
+    # Registry isn't mutated either.
+    assert "dryrun" not in runtime.skills.names()
+
+
+def test_validate_skill_zip_rejects_invalid(tmp_path: Path) -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.config import WorkspaceConfig
+    from cowork_core.runner import SkillInstallError, build_runtime
+
+    cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
+    runtime = build_runtime(cfg)
+    with pytest.raises(SkillInstallError, match="unsafe path"):
+        runtime.validate_skill_zip(_zip_with_path("../evil/SKILL.md"))
+
+
+def test_bundled_plot_ships_quick_chart_script() -> None:
+    """The plot skill exercises the manifest() contract — its
+    scripts/ folder must list quick_chart.py."""
+    from cowork_core import CoworkConfig
+    from cowork_core.runner import build_runtime
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        from cowork_core.config import WorkspaceConfig
+
+        runtime = build_runtime(
+            CoworkConfig(workspace=WorkspaceConfig(root=Path(tmp))),
+        )
+        plot = runtime.skills.get("plot")
+        manifest = plot.manifest()
+        assert "quick_chart.py" in manifest["scripts"]
+
+
+def test_bundled_xlsx_basic_ships_table_io_script() -> None:
+    from cowork_core import CoworkConfig
+    from cowork_core.runner import build_runtime
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        from cowork_core.config import WorkspaceConfig
+
+        runtime = build_runtime(
+            CoworkConfig(workspace=WorkspaceConfig(root=Path(tmp))),
+        )
+        xlsx = runtime.skills.get("xlsx-basic")
+        manifest = xlsx.manifest()
+        assert "table_io.py" in manifest["scripts"]
+
+
 def test_skill_is_frozen_dataclass() -> None:
     s = Skill(
         name="x",

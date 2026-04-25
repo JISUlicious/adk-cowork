@@ -78,6 +78,31 @@ fig.savefig("scratch/overview.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
 ```
 
+## Reusable helpers (`scripts/quick_chart.py`)
+
+This skill ships a small helper module the agent can inline into
+a `python_exec_run` call when the user wants a one-liner. The
+helpers default to the Agg backend, tight bounding boxes, and
+prompt close-on-save so memory doesn't leak across calls.
+
+```python
+# Inline the helpers verbatim before calling them — python_exec_run
+# can't import from outside the scratch dir.
+{{quick_chart.py contents}}
+
+bar_chart(
+    ["Q1", "Q2", "Q3", "Q4"],
+    [120, 150, 170, 200],
+    title="Quarterly Revenue",
+    ylabel="Revenue ($K)",
+    output_path="scratch/chart.png",
+)
+```
+
+Read the skill manifest (`load_skill("plot")["scripts"]`) to
+confirm the file is present and to fetch its body via `fs_read`
+if needed.
+
 ## Notes
 
 - Always set `matplotlib.use("Agg")` before importing `pyplot` — there is no display.
