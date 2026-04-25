@@ -288,6 +288,7 @@ multi-user mode) to unlock "Try it out" calls.
 - [Constitution](CONSTITUTION.md) -- project rules
 - [File index](INDEX.md) -- every file with a one-liner
 - [Writing a skill](docs/WRITING_A_SKILL.md) -- frontmatter, layout, install, troubleshooting
+- [MCP servers](docs/MCP.md) -- transports, dynamic config, three worked examples (filesystem / GitHub / memory)
 - [Changelog](CHANGELOG.md) -- append-only change log
 
 ## License

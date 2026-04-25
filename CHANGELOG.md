@@ -242,3 +242,9 @@ Slice IV — MCP dynamic config + CRUD routes + Settings UI + restart (this comm
 - extend tests/test_mcp.py — 5 new tests (file-backed CRUD round-trip, bundled-delete refusal, 404 on unknown delete, restart rebuilds status); 12 total in test_mcp.py, 231 total
 - update README.md — new feature row "MCP: dynamic config (servers.json) + add / delete / restart routes + Settings UI"
 - update ARCHITECTURE.md — extend MCP paragraph with two-scope merge model, dry-run-on-POST, restart-only reload contract
+
+Slice V — MCP docs + Settings preset dropdown (this commit):
+- add docs/MCP.md — transports, dynamic config, three worked examples (filesystem / GitHub / memory) using official Anthropic MCP servers via `npx -y`, restart-only reload contract, recovery and tool_filter notes
+- add Settings → MCP add-form "Common servers" dropdown — pre-fills name + transport + command/args/env from the same three presets so users avoid hand-typing the npx invocation
+- update README.md Documentation section — link to docs/MCP.md
+- update SPEC.md §2.13 M3 — tick MCP adapter milestone (Slices III + IV); footnote pointing at docs/MCP.md for the npx-based filesystem worked example (cull-audit decision: do not bundle a Cowork-specific FS MCP server)

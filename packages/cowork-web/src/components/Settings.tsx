@@ -930,6 +930,53 @@ function mcpEndpointSummary(server: {
   return server.url || `(${server.transport}: missing url)`;
 }
 
+/** Slice V — pre-filled configs for the three official Anthropic MCP
+ *  servers documented in `docs/MCP.md`. The dropdown drops the user
+ *  into the closest-to-correct shape; they fill in the
+ *  workspace-specific bits (path, token, name) themselves. None of
+ *  these ship as a *runtime* default — Cowork stays neutral on
+ *  which servers a workspace cares about. */
+const MCP_PRESETS: Record<
+  string,
+  {
+    label: string;
+    name: string;
+    transport: McpTransport;
+    command?: string;
+    args?: string;
+    env?: string;
+    description: string;
+  }
+> = {
+  filesystem: {
+    label: "Filesystem (npx · @modelcontextprotocol/server-filesystem)",
+    name: "fs",
+    transport: "stdio",
+    command: "npx",
+    args: "-y\n@modelcontextprotocol/server-filesystem\n/path/to/dir",
+    env: "",
+    description: "Filesystem MCP server (read/write under a directory)",
+  },
+  github: {
+    label: "GitHub (npx · @modelcontextprotocol/server-github)",
+    name: "github",
+    transport: "stdio",
+    command: "npx",
+    args: "-y\n@modelcontextprotocol/server-github",
+    env: "GITHUB_PERSONAL_ACCESS_TOKEN=env:GITHUB_TOKEN",
+    description: "GitHub API",
+  },
+  memory: {
+    label: "Memory (npx · @modelcontextprotocol/server-memory)",
+    name: "memory",
+    transport: "stdio",
+    command: "npx",
+    args: "-y\n@modelcontextprotocol/server-memory",
+    env: "",
+    description: "Persistent key-value memory",
+  },
+};
+
 function McpAddForm({
   client,
   onCancel,
@@ -949,6 +996,20 @@ function McpAddForm({
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const applyPreset = (key: string) => {
+    if (!key) return;
+    const preset = MCP_PRESETS[key];
+    if (!preset) return;
+    setName(preset.name);
+    setTransport(preset.transport);
+    setCommand(preset.command ?? "");
+    setArgsText(preset.args ?? "");
+    setEnvText(preset.env ?? "");
+    setUrl("");
+    setHeadersText("");
+    setDescription(preset.description);
+  };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -993,6 +1054,23 @@ function McpAddForm({
         gap: 8,
       }}
     >
+      <McpFormRow label="Common servers">
+        <select
+          defaultValue=""
+          onChange={(e) => {
+            applyPreset(e.target.value);
+            e.target.value = "";
+          }}
+          style={mcpInputStyle}
+        >
+          <option value="">— pick a preset to pre-fill —</option>
+          {Object.entries(MCP_PRESETS).map(([key, preset]) => (
+            <option key={key} value={key}>
+              {preset.label}
+            </option>
+          ))}
+        </select>
+      </McpFormRow>
       <McpFormRow label="Name">
         <input
           type="text"
