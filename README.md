@@ -237,6 +237,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | MCP: dynamic config (servers.json) + add / delete / restart routes + Settings UI | Core / Server / Settings | wired | Slice IV |
 | MCP: per-session server enable/disable + tool-level gating callback | Core / Server / Settings | wired | Slice VI |
 | Email: end-to-end SMTP send with two-layer confirm gate | Core / Server | wired | M5 |
+| Desktop: persistent recent-workdir across launches | cowork-app | wired | M4-A |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

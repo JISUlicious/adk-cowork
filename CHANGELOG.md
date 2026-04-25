@@ -276,6 +276,13 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### M4 desktop closeout — Slice A (workdir persistence) (2026-04-25)
+
+- update packages/cowork-app/src-tauri/src/lib.rs — replace in-memory-only `RecentWorkdir` with a JSON-backed store that writes atomically (temp + rename) to `recent_workdir.json` under the platform `app_config_dir()`. Reads on `with_storage` construction; ignores malformed files / empty `"path"` strings to fail safely. I/O errors log + degrade to in-memory only — never panic.
+- add 4 new Rust unit tests covering survive-across-construction round-trip, atomic-temp absence after success, malformed-file → empty fallback, empty-string-in-file → empty fallback. 8 total in cowork-app/src-tauri (was 4).
+- update README.md — new feature row "Desktop: persistent recent-workdir across launches"
+- M4-B (Tauri auto-updater wiring) tracked separately as the next slice — needs CI signing keypair + `latest.json` publishing.
+
 ### M5 verification — email send end-to-end (2026-04-25)
 
 - fix permission callback for `email_send` — was reading `to`/`subject`/`body` from args (which only contain `eml_id` + `confirmed`), producing a "Send email to None" prompt; the tool body already returns a properly formatted `confirmation_required` from the .eml file, so the callback now passes through on first call and only enforces the approval token on `confirmed=True` (model can't bypass consent by flipping the flag)

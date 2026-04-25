@@ -93,17 +93,75 @@ async fn pick_files(app: AppHandle) -> Result<Vec<String>, String> {
 }
 
 /// Remember the most-recent workdir so the UI can re-open it on next launch.
-/// Stored in memory only for v1 — persistence is a future add.
-#[derive(Default)]
-struct RecentWorkdir(Mutex<Option<String>>);
+///
+/// Slice M4-A: persists to a single-line JSON file under the platform's
+/// app config dir. Reads on init; writes synchronously on every `set`.
+/// File I/O failures are logged but never panic — the in-memory copy
+/// stays authoritative, so a corrupt or unwritable file just degrades
+/// to the previous v1 in-memory-only behaviour.
+struct RecentWorkdir {
+    state: Mutex<Option<String>>,
+    storage: Option<PathBuf>,
+}
+
+impl Default for RecentWorkdir {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(None),
+            storage: None,
+        }
+    }
+}
 
 impl RecentWorkdir {
+    /// Construct with an on-disk backing file. Reads the file once at
+    /// construction time; missing / unreadable / malformed → no recent
+    /// workdir. Writes happen on every `set`.
+    fn with_storage(storage: PathBuf) -> Self {
+        let initial = Self::read(&storage);
+        Self {
+            state: Mutex::new(initial),
+            storage: Some(storage),
+        }
+    }
+
     fn get(&self) -> Option<String> {
-        self.0.lock().unwrap().clone()
+        self.state.lock().unwrap().clone()
     }
 
     fn set(&self, path: String) {
-        *self.0.lock().unwrap() = Some(path);
+        *self.state.lock().unwrap() = Some(path.clone());
+        if let Some(storage) = &self.storage {
+            if let Err(e) = Self::write(storage, &path) {
+                log::warn!(
+                    "RecentWorkdir: failed to persist to {}: {e}",
+                    storage.display(),
+                );
+            }
+        }
+    }
+
+    fn read(storage: &std::path::Path) -> Option<String> {
+        let raw = std::fs::read_to_string(storage).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        match value.get("path")?.as_str() {
+            Some(s) if !s.is_empty() => Some(s.to_string()),
+            _ => None,
+        }
+    }
+
+    fn write(storage: &std::path::Path, value: &str) -> std::io::Result<()> {
+        if let Some(parent) = storage.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Atomic write: temp file + rename so a crash mid-write can't
+        // produce an empty / half-written JSON that next boot would
+        // see and treat as "no recent workdir".
+        let tmp = storage.with_extension("json.tmp");
+        let body = serde_json::to_string(&serde_json::json!({ "path": value }))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(tmp, storage)
     }
 }
 
@@ -197,7 +255,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SidecarState::default())
-        .manage(RecentWorkdir::default())
         .invoke_handler(tauri::generate_handler![
             get_server,
             open_workspace,
@@ -216,6 +273,20 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // Slice M4-A — persistent RecentWorkdir. Resolve the
+            // platform's app config dir now (we have an AppHandle here)
+            // and hand the storage path to the state object. If the
+            // path resolution itself fails (rare — would need a broken
+            // tauri config), fall back to in-memory only.
+            let recent = match app.path().app_config_dir() {
+                Ok(dir) => RecentWorkdir::with_storage(dir.join("recent_workdir.json")),
+                Err(e) => {
+                    log::warn!("RecentWorkdir: app_config_dir unavailable: {e}; in-memory only");
+                    RecentWorkdir::default()
+                }
+            };
+            app.manage(recent);
 
             // Native menu. Items emit events the frontend can subscribe to
             // instead of hard-coding behavior here.
@@ -277,6 +348,24 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    fn temp_storage_path(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        // Per-test subdirectory keeps parallel runs from stomping on
+        // each other's storage file.
+        let unique = format!(
+            "cowork-app-test-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        );
+        p.push(unique);
+        p.push("recent_workdir.json");
+        p
+    }
+
     #[test]
     fn recent_workdir_starts_empty() {
         let r = RecentWorkdir::default();
@@ -320,5 +409,74 @@ mod tests {
         assert!(v.is_some());
         let s = v.unwrap();
         assert!(s.starts_with("/path/"));
+    }
+
+    // ─────────────── Slice M4-A — persistence ───────────────
+
+    #[test]
+    fn persistent_set_writes_file_and_survives_reload() {
+        let storage = temp_storage_path("survives_reload");
+        // Fresh instance starts empty even though parent dir doesn't exist.
+        let r1 = RecentWorkdir::with_storage(storage.clone());
+        assert_eq!(r1.get(), None);
+
+        r1.set("/Users/alice/projects/foo".to_string());
+
+        // A *new* instance reads the same path and finds the same value.
+        let r2 = RecentWorkdir::with_storage(storage.clone());
+        assert_eq!(r2.get(), Some("/Users/alice/projects/foo".to_string()));
+
+        // Cleanup — best-effort.
+        let _ = std::fs::remove_file(&storage);
+        if let Some(parent) = storage.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+
+    #[test]
+    fn persistent_set_uses_atomic_temp_then_rename() {
+        let storage = temp_storage_path("atomic_temp");
+        let r = RecentWorkdir::with_storage(storage.clone());
+        r.set("/x".to_string());
+        // The temp file should not exist after a successful write.
+        let tmp = storage.with_extension("json.tmp");
+        assert!(!tmp.exists(), "temp file should be renamed away");
+        assert!(storage.exists(), "final file should exist");
+
+        let _ = std::fs::remove_file(&storage);
+        if let Some(parent) = storage.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+
+    #[test]
+    fn persistent_malformed_file_treated_as_empty() {
+        let storage = temp_storage_path("malformed");
+        std::fs::create_dir_all(storage.parent().unwrap()).unwrap();
+        std::fs::write(&storage, "not valid json {{{").unwrap();
+
+        let r = RecentWorkdir::with_storage(storage.clone());
+        assert_eq!(r.get(), None);
+
+        let _ = std::fs::remove_file(&storage);
+        if let Some(parent) = storage.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+
+    #[test]
+    fn persistent_empty_path_in_file_treated_as_empty() {
+        // A file with `{"path": ""}` shouldn't make us claim a workdir.
+        let storage = temp_storage_path("empty_path");
+        std::fs::create_dir_all(storage.parent().unwrap()).unwrap();
+        std::fs::write(&storage, r#"{"path": ""}"#).unwrap();
+
+        let r = RecentWorkdir::with_storage(storage.clone());
+        assert_eq!(r.get(), None);
+
+        let _ = std::fs::remove_file(&storage);
+        if let Some(parent) = storage.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
     }
 }
