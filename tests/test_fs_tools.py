@@ -10,6 +10,7 @@ from cowork_core.config import CoworkConfig
 from cowork_core.execenv import ExecEnvError, ManagedExecEnv
 from cowork_core.approvals import InMemoryApprovalStore
 from cowork_core.skills import SkillRegistry
+from cowork_core.storage import InMemoryProjectStore, InMemoryUserStore
 from cowork_core.tools import COWORK_CONTEXT_KEY, CoworkToolContext, ToolRegistry
 from cowork_core.tools.fs import (
     fs_edit,
@@ -39,6 +40,8 @@ def tctx(tmp_path: Path) -> MagicMock:
         skills=SkillRegistry(),
         env=ManagedExecEnv(project=project, session=session),
         approvals=InMemoryApprovalStore(),
+        user_store=InMemoryUserStore(),
+        project_store=InMemoryProjectStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}

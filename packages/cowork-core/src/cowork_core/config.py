@@ -157,6 +157,26 @@ class CompactionConfig(BaseModel):
     so recent turns remain verbatim in the agent's context."""
 
 
+class StorageConfig(BaseModel):
+    """Slice S1 — pluggable storage backend for multi-user mode.
+
+    Single-user mode ignores this entirely (always FS under
+    ``~/.config/cowork/`` + ``<workdir>/.cowork/``). Multi-user mode
+    auto-selects ``backend = "sqlite"`` when unspecified, with the DB
+    path falling back to ``<workspace>/multiuser.db``.
+
+    A future Postgres backing would set ``backend = "postgres"`` +
+    ``dsn = "postgresql://..."`` without touching the rest of the
+    runtime — the registry pattern in ``storage/factory.py`` makes
+    adding backends a pure pure-add.
+    """
+
+    backend: str = ""  # "" = auto (sqlite for MU, FS for SU)
+    dsn: str = ""  # backend-specific connection string
+    pool_size: int = 0  # 0 = backend default
+    extras: dict[str, str] = Field(default_factory=dict)
+
+
 class CoworkConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -167,6 +187,7 @@ class CoworkConfig(BaseModel):
     email: EmailConfig = Field(default_factory=EmailConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
 
     @classmethod

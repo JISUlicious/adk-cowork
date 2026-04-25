@@ -16,6 +16,7 @@ from cowork_core.skills import (
     load_skill,
     parse_skill_md,
 )
+from cowork_core.storage import InMemoryProjectStore, InMemoryUserStore
 from cowork_core.tools import COWORK_CONTEXT_KEY, CoworkToolContext
 from cowork_core.workspace import ProjectRegistry, Workspace
 
@@ -116,6 +117,8 @@ def test_load_skill_tool_roundtrip(tmp_path: Path) -> None:
         skills=skill_reg,
         env=ManagedExecEnv(project=project, session=session),
         approvals=InMemoryApprovalStore(),
+        user_store=InMemoryUserStore(),
+        project_store=InMemoryProjectStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}
@@ -140,6 +143,8 @@ def test_load_skill_unknown(tmp_path: Path) -> None:
         skills=SkillRegistry(),
         env=ManagedExecEnv(project=project, session=session),
         approvals=InMemoryApprovalStore(),
+        user_store=InMemoryUserStore(),
+        project_store=InMemoryProjectStore(),
     )
     fake = MagicMock()
     fake.state = {COWORK_CONTEXT_KEY: ctx}
@@ -563,6 +568,8 @@ def test_load_skill_refuses_disabled(tmp_path: Path) -> None:
         skills=skill_reg,
         env=ManagedExecEnv(project=project, session=session),
         approvals=InMemoryApprovalStore(),
+        user_store=InMemoryUserStore(),
+        project_store=InMemoryProjectStore(),
     )
     fake = MagicMock()
     fake.state = {

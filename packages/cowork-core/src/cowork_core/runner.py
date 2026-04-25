@@ -36,6 +36,13 @@ from cowork_core.config import CoworkConfig, McpServerConfig
 from cowork_core.execenv import LocalDirExecEnv, ManagedExecEnv
 from cowork_core.sessions import SqliteCoworkSessionService
 from cowork_core.skills import SkillRegistry, register_skill_tools
+from cowork_core.storage import (
+    InMemoryProjectStore,
+    InMemoryUserStore,
+    ProjectStore,
+    UserStore,
+    build_stores,
+)
 from cowork_core.tools import (
     COWORK_AUTO_ROUTE_KEY,
     COWORK_CONTEXT_KEY,
@@ -159,6 +166,19 @@ class CoworkRuntime:
     # rebuilding the closure. Tools not in the map are treated as
     # non-MCP and pass through.
     mcp_tool_owner: dict[str, str] = field(default_factory=dict)
+    # Slice S1 — storage hierarchy. ``user_store`` and
+    # ``project_store`` route to FS in single-user mode and to a
+    # database backing (SQLite ships in S1; Postgres etc. via
+    # ``register_backend``) in multi-user mode. Built once per
+    # runtime by ``build_stores`` and threaded into every
+    # ``CoworkToolContext`` so tools can read/write per-user and
+    # per-project state without knowing the deployment shape.
+    user_store: "UserStore" = field(
+        default_factory=lambda: InMemoryUserStore(),
+    )
+    project_store: "ProjectStore" = field(
+        default_factory=lambda: InMemoryProjectStore(),
+    )
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -232,6 +252,8 @@ class CoworkRuntime:
             skills=session_skills,
             env=env,
             approvals=self.approvals,
+            user_store=self.user_store,
+            project_store=self.project_store,
         )
 
     def _materialize_local_session(
@@ -1442,6 +1464,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
             agent=agent,
             session_service=session_service,
         )
+    user_store, project_store = build_stores(cfg, workspace)
     return CoworkRuntime(
         cfg=cfg,
         workspace=workspace,
@@ -1451,6 +1474,8 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         runner=runner,
         mcp_status=mcp_status,
         mcp_tool_owner=mcp_tool_owner,
+        user_store=user_store,
+        project_store=project_store,
     )
 
 

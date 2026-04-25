@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from cowork_core.config import CoworkConfig
     from cowork_core.execenv import ExecEnv
     from cowork_core.skills.loader import SkillRegistry
+    from cowork_core.storage.protocols import ProjectStore, UserStore
 
 COWORK_CONTEXT_KEY = "cowork.tool_context"
 COWORK_READS_KEY = "cowork.session_reads"
@@ -70,6 +71,12 @@ class CoworkToolContext:
     skills: SkillRegistry
     env: ExecEnv
     approvals: ApprovalStore
+    # Slice S1 — storage hierarchy. Single-user mode: FS backings.
+    # Multi-user mode: SQLite (or future Postgres/etc.). Tools call
+    # ``ctx.user_store.write(ctx.session.user_id, key, body)`` without
+    # knowing which backing they hit.
+    user_store: UserStore
+    project_store: ProjectStore
 
 
 def get_cowork_context(tool_context: ToolContext) -> CoworkToolContext:

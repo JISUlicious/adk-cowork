@@ -276,6 +276,28 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Storage hierarchy — Slice S1 (UserStore + ProjectStore + dual backings) (2026-04-25)
+
+Foundational refactor settling Cowork's storage model so future subsystems
+(memory first, eventually skills + MCP) plug into the right scope based
+on deployment mode. Single-user side mirrors OpenCode's
+`~/.config/opencode/` filesystem layout; multi-user side adds a SQLite
+backing at `<workspace>/multiuser.db` with rows keyed by user_id (and
+user_id+project for project-scope state). Auto-detected from
+`cfg.auth.keys`. A backend registry leaves room for Postgres/Turso/etc.
+without rewriting the factory.
+
+- add `packages/cowork-core/src/cowork_core/storage/` package — `protocols.py` (`UserStore`, `ProjectStore`), `fs.py` (`FSUserStore`, `FSProjectStore`), `sqlite.py` (`SqliteUserStore`, `SqliteProjectStore`, `_open_sqlite`), `memory.py` (`InMemoryUserStore`, `InMemoryProjectStore` for tests/ephemeral), `factory.py` (`build_stores`, `register_backend`, `_BACKENDS` registry)
+- update `cowork_core/config.py` — new `StorageConfig` Pydantic model with `backend`, `dsn`, `pool_size`, `extras`; added to `CoworkConfig.storage`
+- update `cowork_core/runner.py` — `build_runtime` calls `build_stores`, populates `runtime.user_store` / `.project_store`; `_build_context` threads stores into every `CoworkToolContext`
+- update `cowork_core/tools/base.py` — `CoworkToolContext` gains required `user_store: UserStore` + `project_store: ProjectStore` fields
+- update tests/* — 7 test files (test_email, test_skills, test_fs_tools, test_python_exec, test_http_and_search, test_tool_registry, test_shell_run) — pass `InMemoryUserStore()` + `InMemoryProjectStore()` when constructing `CoworkToolContext` directly
+- fix `_atomic_write` in `storage/fs.py` — original implementation used a fixed `.tmp` suffix that collided between concurrent writers; new code mixes pid + thread id + cryptographic nonce so simultaneous writers get unique temp paths and the rename never lands on a missing file (caught by the new concurrent-write test)
+- add `tests/test_storage.py` — 18 new tests: FS round-trip + list-by-prefix + delete + path-traversal rejection + atomic concurrent writes; FS project store isolation across workdirs; SQLite round-trip + user/project isolation + upsert + delete; factory routes FS in SU + SQLite in MU + raises with available-backend listing on unknown name; backend registry dispatch via a fake backend (proves the Postgres seam without shipping a second real backend); runtime + context wiring; cross-mode key-shape compat smoke
+- update `ARCHITECTURE.md` §5 — new "Storage hierarchy" subsection with the protocol/backing matrix
+- update `README.md` — feature row "Storage: UserStore / ProjectStore protocols + FS + SQLite backings (OpenCode-style FS layout)"
+- 259 total tests green (was 241, +18)
+
 ### M4 desktop closeout — Slice A (workdir persistence) (2026-04-25)
 
 - update packages/cowork-app/src-tauri/src/lib.rs — replace in-memory-only `RecentWorkdir` with a JSON-backed store that writes atomically (temp + rename) to `recent_workdir.json` under the platform `app_config_dir()`. Reads on `with_storage` construction; ignores malformed files / empty `"path"` strings to fail safely. I/O errors log + degrade to in-memory only — never panic.

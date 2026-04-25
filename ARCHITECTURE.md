@@ -261,6 +261,34 @@ Rule of thumb: **if new state might need to be written from an HTTP
 handler, it belongs in a side-channel store, not in
 `session_service`.** Read `approvals.py:11–22` before adding one.
 
+### Storage hierarchy — `UserStore` / `ProjectStore` (Slice S1)
+
+For state that *isn't* per-turn but is per-user or per-project (memory
+pages, future per-user skill prefs, etc.), Cowork ships two
+Protocol-shaped stores under `cowork_core/storage/`:
+
+| Protocol | Single-user backing | Multi-user backing |
+|---|---|---|
+| `UserStore` | `FSUserStore` rooted at `~/.config/cowork/` (mirrors OpenCode's `~/.config/opencode/` convention) | `SqliteUserStore` against `<workspace>/multiuser.db`, table `user_state(user_id, key, value, updated_at)` |
+| `ProjectStore` | `FSProjectStore` rooted at `<workdir>/.cowork/` (same hidden namespace `LocalDirExecEnv` uses for session scratch) | `SqliteProjectStore` against the same DB, table `project_state(user_id, project, key, value, updated_at)` |
+
+Mode is auto-detected by `build_stores(cfg, workspace)` — if
+`cfg.auth.keys` is non-empty the runtime is in multi-user mode and
+the SQLite backings are returned; otherwise FS. The detection lives
+in `storage/factory.py`; call sites (`runner.py:build_runtime`,
+`_build_context`) never branch on mode themselves.
+
+Path-shaped string keys (e.g. `"memory/pages/scratch.md"`) are the
+lingua franca: the FS backing maps them to relative file paths under
+the scope root, the SQLite backing tokenizes them as opaque keys.
+Same call site works against either backing, no conditionals.
+
+A backend registry (`register_backend(name, builder)`) lets future
+backings (Postgres, Turso, …) drop in by calling `register_backend`
+at module import time and exposing the two Protocol classes — no
+factory rewrite. Skills + MCP keep their current paths in S1; a
+later slice migrates them onto these abstractions.
+
 ## 6. File surfaces — managed vs local-dir
 
 Two `ExecEnv` implementations select the agent's filesystem view:
