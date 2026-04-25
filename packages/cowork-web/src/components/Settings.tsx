@@ -17,7 +17,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CoworkClient } from "../transport/client";
-import type { HealthInfo, PolicyMode, PythonExecPolicy } from "../transport/types";
+import type {
+  AddMcpServerRequest,
+  HealthInfo,
+  McpServerRecord,
+  McpTransport,
+  PolicyMode,
+  PythonExecPolicy,
+} from "../transport/types";
 import { usePreferences } from "../preferences";
 import {
   type ThemeMode,
@@ -530,6 +537,7 @@ function SecTools({
           <AgentStack agents={["researcher", "writer", "analyst", "reviewer"]} size={16} />
         </Field>
       ))}
+      <McpServersBlock client={client} onChanged={refreshHealth} />
       <div
         style={{
           display: "flex",
@@ -661,6 +669,473 @@ function SecTools({
       )}
     </div>
   );
+}
+
+/* ───────────────────── MCP servers ───────────────────── */
+
+/** Slice IV — render + manage user-installed MCP servers. Sits between
+ *  the Tools list and the Skills list inside the Agents tab. The list
+ *  pairs each ``McpServerInfo`` with the live ``MCPServerStatusInfo``
+ *  from the last toolset build, so the green/red pill matches what
+ *  Settings → System renders. Bundled servers (declared in
+ *  ``cowork.toml``) carry the lock icon — delete is gated. */
+function McpServersBlock({
+  client,
+  onChanged,
+}: {
+  client: import("../transport/client").CoworkClient;
+  onChanged: () => void;
+}) {
+  const [records, setRecords] = useState<McpServerRecord[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [discovered, setDiscovered] = useState<{ name: string; tools: string[] } | null>(null);
+
+  const refresh = () => {
+    client
+      .listMcpServers()
+      .then((rs) => {
+        setRecords(rs);
+        setError(null);
+      })
+      .catch((e) => setError(String(e)));
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client]);
+
+  const onDelete = async (name: string) => {
+    if (!window.confirm(`Remove MCP server "${name}"? Takes effect on next restart.`)) {
+      return;
+    }
+    try {
+      await client.deleteMcpServer(name);
+      refresh();
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onRestart = async () => {
+    if (!window.confirm("Restart MCP toolsets? In-flight turns will terminate.")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await client.restartMcp();
+      refresh();
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 12,
+          marginTop: 24,
+        }}
+      >
+        <h3 style={{ margin: 0, flex: 1 }}>MCP servers</h3>
+        <button
+          type="button"
+          onClick={() => void onRestart()}
+          disabled={busy || (records?.length ?? 0) === 0}
+          style={mcpBtnStyle(busy)}
+          title="Re-mount toolsets from the current effective config"
+        >
+          {busy ? "restarting…" : "↻ restart"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setAdding((v) => !v)}
+          style={mcpBtnStyle(false)}
+          title="Add a new MCP server"
+        >
+          {adding ? "cancel" : "+ add server"}
+        </button>
+      </div>
+      <div className="desc">
+        Model Context Protocol servers expose external tools to the
+        agent. Bundled servers come from{" "}
+        <code style={{ margin: "0 4px" }}>cowork.toml</code>; user
+        servers persist to{" "}
+        <code style={{ margin: "0 4px" }}>&lt;workspace&gt;/global/mcp/servers.json</code>.
+        Add/remove takes effect on the next restart.
+      </div>
+      {error && (
+        <div
+          style={{
+            fontSize: "var(--fs-xs)",
+            color: "var(--danger)",
+            marginBottom: 8,
+          }}
+        >
+          {error}
+        </div>
+      )}
+      {adding && (
+        <McpAddForm
+          client={client}
+          onCancel={() => setAdding(false)}
+          onSaved={(name, tools) => {
+            setAdding(false);
+            setDiscovered({ name, tools });
+            refresh();
+            onChanged();
+          }}
+        />
+      )}
+      {discovered && (
+        <div
+          style={{
+            fontSize: "var(--fs-xs)",
+            color: "var(--ink-3)",
+            background: "var(--paper-2)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-sm)",
+            padding: "6px 10px",
+            margin: "8px 0",
+          }}
+        >
+          <div>
+            Saved <code>{discovered.name}</code>. Discovered tools:
+          </div>
+          <div style={{ fontFamily: "var(--mono)", marginTop: 4 }}>
+            {discovered.tools.length === 0 ? "(none)" : discovered.tools.join(", ")}
+          </div>
+          <div style={{ marginTop: 4 }}>
+            Click <strong>↻ restart</strong> to make these available to the agent.
+            To filter the tool list, edit{" "}
+            <code>servers.json</code> and re-add with{" "}
+            <code>tool_filter</code>.
+          </div>
+        </div>
+      )}
+      {records === null ? (
+        <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>Loading…</div>
+      ) : records.length === 0 ? (
+        <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>
+          No MCP servers configured.
+        </div>
+      ) : (
+        records.map(({ server, status }) => (
+          <Field
+            key={server.name}
+            label={
+              <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
+                {server.name}
+              </span>
+            }
+            sub={server.description || mcpEndpointSummary(server)}
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <span
+                title={
+                  status.status === "error"
+                    ? status.last_error ?? "error"
+                    : `${status.tool_count ?? "?"} tool(s)`
+                }
+                style={{
+                  fontSize: "var(--fs-xs)",
+                  fontFamily: "var(--mono)",
+                  padding: "1px 6px",
+                  border: "1px solid var(--line)",
+                  borderRadius: "var(--radius-sm)",
+                  color: status.status === "ok" ? "var(--ok, #2a7)" : "var(--danger)",
+                }}
+              >
+                {status.status === "ok" ? `ok · ${status.tool_count ?? 0}` : "error"}
+              </span>
+              <span
+                title={`Transport: ${server.transport}`}
+                style={{
+                  color: "var(--ink-4)",
+                  fontSize: "var(--fs-xs)",
+                  fontFamily: "var(--mono)",
+                }}
+              >
+                {server.transport}
+              </span>
+              <button
+                type="button"
+                onClick={() => !server.bundled && void onDelete(server.name)}
+                disabled={server.bundled}
+                title={
+                  server.bundled
+                    ? "Bundled server — declared in cowork.toml"
+                    : "Remove"
+                }
+                style={{
+                  width: 20,
+                  height: 20,
+                  display: "grid",
+                  placeItems: "center",
+                  fontSize: 13,
+                  color: server.bundled ? "var(--ink-4)" : "var(--ink-3)",
+                  opacity: server.bundled ? 0.4 : 1,
+                  cursor: server.bundled ? "not-allowed" : "pointer",
+                  background: "transparent",
+                }}
+              >
+                {server.bundled ? "🔒" : "×"}
+              </button>
+            </span>
+          </Field>
+        ))
+      )}
+    </div>
+  );
+}
+
+function mcpBtnStyle(disabled: boolean): React.CSSProperties {
+  return {
+    fontFamily: "var(--mono)",
+    fontSize: 11,
+    padding: "3px 10px",
+    borderRadius: "var(--radius-sm)",
+    border: "1px solid var(--line)",
+    background: "var(--paper)",
+    color: disabled ? "var(--ink-4)" : "var(--ink-2)",
+    cursor: disabled ? "wait" : "pointer",
+  };
+}
+
+function mcpEndpointSummary(server: {
+  transport: McpTransport;
+  command: string;
+  args: string[];
+  url: string;
+}): string {
+  if (server.transport === "stdio") {
+    const parts = [server.command, ...server.args].filter(Boolean);
+    return parts.length ? parts.join(" ") : "(stdio: missing command)";
+  }
+  return server.url || `(${server.transport}: missing url)`;
+}
+
+function McpAddForm({
+  client,
+  onCancel,
+  onSaved,
+}: {
+  client: import("../transport/client").CoworkClient;
+  onCancel: () => void;
+  onSaved: (name: string, tools: string[]) => void;
+}) {
+  const [name, setName] = useState("");
+  const [transport, setTransport] = useState<McpTransport>("stdio");
+  const [command, setCommand] = useState("");
+  const [argsText, setArgsText] = useState("");
+  const [envText, setEnvText] = useState("");
+  const [url, setUrl] = useState("");
+  const [headersText, setHeadersText] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      const req: AddMcpServerRequest = {
+        name: name.trim(),
+        transport,
+        description: description.trim(),
+      };
+      if (transport === "stdio") {
+        req.command = command.trim();
+        req.args = argsText
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        req.env = parseKvLines(envText);
+      } else {
+        req.url = url.trim();
+        req.headers = parseKvLines(headersText);
+      }
+      const res = await client.addMcpServer(req);
+      onSaved(res.server.name, res.tools);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => void onSubmit(e)}
+      style={{
+        background: "var(--paper-2)",
+        border: "1px solid var(--line)",
+        borderRadius: "var(--radius-sm)",
+        padding: 12,
+        margin: "8px 0",
+        display: "grid",
+        gap: 8,
+      }}
+    >
+      <McpFormRow label="Name">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+          placeholder="my-server"
+          style={mcpInputStyle}
+        />
+      </McpFormRow>
+      <McpFormRow label="Transport">
+        <select
+          value={transport}
+          onChange={(e) => setTransport(e.target.value as McpTransport)}
+          style={mcpInputStyle}
+        >
+          <option value="stdio">stdio</option>
+          <option value="sse">sse</option>
+          <option value="http">http</option>
+        </select>
+      </McpFormRow>
+      {transport === "stdio" ? (
+        <>
+          <McpFormRow label="Command">
+            <input
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder="npx"
+              style={mcpInputStyle}
+            />
+          </McpFormRow>
+          <McpFormRow label="Args (one per line)">
+            <textarea
+              value={argsText}
+              onChange={(e) => setArgsText(e.target.value)}
+              rows={3}
+              placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/path/to/dir"}
+              style={mcpInputStyle}
+            />
+          </McpFormRow>
+          <McpFormRow label="Env (KEY=VAL, one per line)">
+            <textarea
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+              rows={2}
+              placeholder="GITHUB_TOKEN=env:GITHUB_TOKEN"
+              style={mcpInputStyle}
+            />
+          </McpFormRow>
+        </>
+      ) : (
+        <>
+          <McpFormRow label="URL">
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com/mcp"
+              style={mcpInputStyle}
+            />
+          </McpFormRow>
+          <McpFormRow label="Headers (KEY=VAL, one per line)">
+            <textarea
+              value={headersText}
+              onChange={(e) => setHeadersText(e.target.value)}
+              rows={2}
+              placeholder="Authorization=Bearer xxx"
+              style={mcpInputStyle}
+            />
+          </McpFormRow>
+        </>
+      )}
+      <McpFormRow label="Description">
+        <input
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Shown in Settings"
+          style={mcpInputStyle}
+        />
+      </McpFormRow>
+      {error && (
+        <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)" }}>{error}</div>
+      )}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button type="button" onClick={onCancel} disabled={busy} style={mcpBtnStyle(busy)}>
+          cancel
+        </button>
+        <button type="submit" disabled={busy || !name.trim()} style={mcpBtnStyle(busy)}>
+          {busy ? "saving…" : "save (dry-run + persist)"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function McpFormRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label
+      style={{
+        display: "grid",
+        gridTemplateColumns: "180px 1fr",
+        alignItems: "start",
+        gap: 8,
+        fontSize: "var(--fs-xs)",
+        color: "var(--ink-3)",
+      }}
+    >
+      <span style={{ paddingTop: 4 }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const mcpInputStyle: React.CSSProperties = {
+  width: "100%",
+  fontFamily: "var(--mono)",
+  fontSize: 12,
+  padding: "4px 6px",
+  borderRadius: "var(--radius-sm)",
+  border: "1px solid var(--line)",
+  background: "var(--paper)",
+  color: "var(--ink-1)",
+  resize: "vertical",
+};
+
+function parseKvLines(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const idx = line.indexOf("=");
+    if (idx <= 0) continue;
+    out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+  }
+  return out;
 }
 
 function describeTool(name: string): string {

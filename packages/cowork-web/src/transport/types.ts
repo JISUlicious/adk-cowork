@@ -97,6 +97,11 @@ export interface SkillInfo {
   content_hash?: string;
 }
 
+/** MCP transport selector — picks which ADK ``ConnectionParams``
+ *  flavour the server uses. ``stdio`` runs a local subprocess;
+ *  ``sse`` and ``http`` connect to a URL. */
+export type McpTransport = "stdio" | "sse" | "http";
+
 /** Per-MCP-server health entry. Mirrors
  *  ``cowork_server.api_models.MCPServerStatusInfo`` server-side.
  *  ``status === "error"`` carries a non-null ``last_error`` with
@@ -106,7 +111,50 @@ export interface MCPServerStatusInfo {
   status: "ok" | "error";
   last_error: string | null;
   tool_count: number | null;
-  transport: "stdio" | "sse" | "http";
+  transport: McpTransport;
+}
+
+/** MCP server config the Settings UI renders + edits. Mirrors
+ *  ``cowork_server.api_models.McpServerInfo``. */
+export interface McpServerInfo {
+  name: string;
+  transport: McpTransport;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  url: string;
+  headers: Record<string, string>;
+  tool_filter: string[] | null;
+  description: string;
+  bundled: boolean;
+}
+
+export interface McpServerRecord {
+  server: McpServerInfo;
+  status: MCPServerStatusInfo;
+}
+
+/** Body for ``POST /v1/mcp/servers``. Server validates the name,
+ *  dry-runs the connection, and persists to
+ *  ``<workspace>/global/mcp/servers.json``. */
+export interface AddMcpServerRequest {
+  name: string;
+  transport?: McpTransport;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  tool_filter?: string[] | null;
+  description?: string;
+}
+
+export interface AddMcpServerResponse {
+  server: McpServerInfo;
+  /** Tool names discovered during the dry-run probe. The UI
+   *  shows them so the user can pick a narrower ``tool_filter``
+   *  on a follow-up save. */
+  tools: string[];
 }
 
 export interface HealthInfo {

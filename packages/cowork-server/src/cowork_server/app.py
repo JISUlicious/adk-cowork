@@ -19,7 +19,8 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Any
 
 from cowork_core import CoworkConfig, CoworkRuntime, PreviewCache, build_runtime
-from cowork_core.runner import APP_NAME, SkillInstallError
+from cowork_core.config import McpServerConfig
+from cowork_core.runner import APP_NAME, MCPInstallError, SkillInstallError
 from fastapi import (
     Depends,
     FastAPI,
@@ -37,10 +38,13 @@ from google.adk.events.event_actions import EventActions
 from google.genai import types as genai_types
 
 from cowork_server.api_models import (
+    AddMcpServerRequest,
+    AddMcpServerResponse,
     AutoRouteResponse,
     ClearNotificationsResponse,
     CreateProjectRequest,
     CreateSessionRequest,
+    DeleteMcpServerResult,
     DeleteResponse,
     DeleteSkillResult,
     FileEntry,
@@ -48,6 +52,10 @@ from cowork_server.api_models import (
     GrantApprovalResponse,
     HealthResponse,
     InstallSkillResult,
+    McpServerInfo,
+    McpServerRecord,
+    McpServersListResponse,
+    RestartMcpResult,
     ValidateSkillResult,
     LocalFileListResult,
     LocalFileReadResult,
@@ -102,6 +110,7 @@ _OPENAPI_TAGS: list[dict[str, str]] = [
     {"name": "local-dir", "description": "Desktop-mode workdir browsing + sessions."},
     {"name": "streams", "description": "SSE / WebSocket event streams."},
     {"name": "skills", "description": "User-installable skill bundles (zip install / uninstall)."},
+    {"name": "mcp", "description": "Model Context Protocol server management (add / remove / restart)."},
 ]
 
 
@@ -624,6 +633,136 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 raise HTTPException(status_code=404, detail=message) from exc
             raise HTTPException(status_code=400, detail=message) from exc
         return {"name": name, "status": "deleted"}
+
+    # ── MCP server management (Slice IV) ──────────────────────────────
+
+    def _server_info(name: str, cfg: McpServerConfig) -> dict[str, Any]:
+        """Materialise an MCP server config for the wire shape."""
+        return {
+            "name": name,
+            "transport": cfg.transport,
+            "command": cfg.command,
+            "args": list(cfg.args),
+            "env": dict(cfg.env),
+            "url": cfg.url,
+            "headers": dict(cfg.headers),
+            "tool_filter": list(cfg.tool_filter) if cfg.tool_filter else None,
+            "description": cfg.description,
+            "bundled": cfg.bundled,
+        }
+
+    def _status_payload(status: Any) -> dict[str, Any]:
+        return {
+            "name": status.name,
+            "status": status.status,
+            "last_error": status.last_error,
+            "tool_count": status.tool_count,
+            "transport": status.transport,
+        }
+
+    @app.get(
+        "/v1/mcp/servers",
+        tags=["mcp"],
+        summary="List configured MCP servers + per-server status",
+        response_model=McpServersListResponse,
+    )
+    async def list_mcp_servers(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """One row per server: the saved config + the live build
+        status. Settings → MCP servers renders this list and gates
+        the delete affordance on ``server.bundled``."""
+        records: list[dict[str, Any]] = []
+        for name, (cfg, status) in runtime.list_mcp_servers().items():
+            records.append(
+                {
+                    "server": _server_info(name, cfg),
+                    "status": _status_payload(status),
+                }
+            )
+        return {"servers": records}
+
+    @app.post(
+        "/v1/mcp/servers",
+        tags=["mcp"],
+        summary="Add or update an MCP server (with dry-run discovery)",
+        response_model=AddMcpServerResponse,
+    )
+    async def add_mcp_server(
+        body: AddMcpServerRequest,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Validate the name, dry-run the connection (so the user
+        gets immediate feedback if the command/url is wrong), and
+        persist to ``<workspace>/global/mcp/servers.json``. Returns
+        the saved config + the discovered tool list so Settings can
+        offer those tools as ``tool_filter`` options. The change
+        does **not** take effect until ``POST /v1/mcp/restart``."""
+        cfg = McpServerConfig(
+            transport=body.transport,
+            command=body.command,
+            args=body.args,
+            env=body.env,
+            url=body.url,
+            headers=body.headers,
+            tool_filter=body.tool_filter,
+            description=body.description,
+            bundled=False,
+        )
+        try:
+            tool_names = await runtime.dry_run_mcp_server(cfg)
+        except MCPInstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            runtime.save_mcp_server(body.name, cfg)
+        except MCPInstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "server": _server_info(body.name, cfg),
+            "tools": tool_names,
+        }
+
+    @app.delete(
+        "/v1/mcp/servers/{name}",
+        tags=["mcp"],
+        summary="Remove a user MCP server",
+        response_model=DeleteMcpServerResult,
+    )
+    async def delete_mcp_server_endpoint(
+        name: str,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        """Removes the entry from ``servers.json``. Bundled servers
+        (declared in ``cowork.toml``) refuse with 400. Takes effect
+        on the next ``POST /v1/mcp/restart``."""
+        try:
+            runtime.delete_mcp_server(name)
+        except MCPInstallError as exc:
+            message = str(exc)
+            if message.startswith("unknown MCP server"):
+                raise HTTPException(status_code=404, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {"name": name, "status": "deleted"}
+
+    @app.post(
+        "/v1/mcp/restart",
+        tags=["mcp"],
+        summary="Re-mount MCP toolsets from the current effective config",
+        response_model=RestartMcpResult,
+    )
+    async def restart_mcp(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Tear down current MCP toolsets, rebuild from the merged
+        TOML + ``servers.json`` config, and replace the runner's
+        agent in place. ``session_service`` is preserved so existing
+        sessions stay reachable. **In-flight turns terminate** when
+        the agent's tool list mutates underneath them — Settings
+        confirms before calling this."""
+        runtime.restart_mcp()
+        return {
+            "servers": [_status_payload(s) for s in runtime.mcp_status.values()],
+        }
 
     # ── Global search (⌘K palette — F.P6b) ────────────────────────────
 

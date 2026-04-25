@@ -7,12 +7,16 @@
  */
 
 import type {
+  AddMcpServerRequest,
+  AddMcpServerResponse,
   AdkEvent,
   FileEntry,
   HealthInfo,
   LocalFileListResult,
   LocalFileReadResult,
   LocalSessionListItem,
+  MCPServerStatusInfo,
+  McpServerRecord,
   Notification,
   PolicyMode,
   ProjectInfo,
@@ -195,6 +199,65 @@ export class CoworkClient {
       const detail = await r.text();
       throw new Error(`uninstallSkill: ${r.status} — ${detail}`);
     }
+  }
+
+  /** Configured MCP servers + their live status (Slice IV). Each entry
+   *  pairs the user-editable ``McpServerInfo`` with the per-server
+   *  ``MCPServerStatusInfo`` from the last toolset build. Bundled
+   *  servers (declared in ``cowork.toml``) carry ``bundled: true``
+   *  and refuse delete. */
+  async listMcpServers(): Promise<McpServerRecord[]> {
+    const r = await fetch(`${this.baseUrl}/v1/mcp/servers`, {
+      headers: this.jsonHeaders(),
+    });
+    if (!r.ok) throw new Error(`listMcpServers: ${r.status}`);
+    return ((await r.json()).servers ?? []) as McpServerRecord[];
+  }
+
+  /** Add or update a user MCP server. Server dry-runs the connection
+   *  and returns the discovered tool list so the caller can pick a
+   *  narrower ``tool_filter`` on a follow-up save. The change is
+   *  staged in ``<workspace>/global/mcp/servers.json`` but does NOT
+   *  affect the running root agent — call ``restartMcp`` to remount. */
+  async addMcpServer(req: AddMcpServerRequest): Promise<AddMcpServerResponse> {
+    const r = await fetch(`${this.baseUrl}/v1/mcp/servers`, {
+      method: "POST",
+      headers: this.jsonHeaders(),
+      body: JSON.stringify(req),
+    });
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`addMcpServer: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
+  /** Remove a user MCP server from ``servers.json``. Bundled servers
+   *  return 400; unknown names return 404. Like add, takes effect on
+   *  the next ``restartMcp`` call. */
+  async deleteMcpServer(name: string): Promise<void> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/mcp/servers/${encodeURIComponent(name)}`,
+      { method: "DELETE", headers: this.authHeaders() },
+    );
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`deleteMcpServer: ${r.status} — ${detail}`);
+    }
+  }
+
+  /** Rebuild the root agent's MCP toolsets from the current effective
+   *  config (TOML + servers.json). In-flight turns terminate — the
+   *  Settings UI confirms before calling. Returns the fresh per-server
+   *  status list so the caller can refresh badges without a second
+   *  health roundtrip. */
+  async restartMcp(): Promise<MCPServerStatusInfo[]> {
+    const r = await fetch(`${this.baseUrl}/v1/mcp/restart`, {
+      method: "POST",
+      headers: this.jsonHeaders(),
+    });
+    if (!r.ok) throw new Error(`restartMcp: ${r.status}`);
+    return ((await r.json()).servers ?? []) as MCPServerStatusInfo[];
   }
 
   /** Cross-project ⌘K palette search. Server caches per (user, q) for

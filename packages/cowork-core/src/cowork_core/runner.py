@@ -31,7 +31,7 @@ from cowork_core.notifications import (
     InMemoryNotificationStore,
     NotificationStore,
 )
-from cowork_core.config import CoworkConfig
+from cowork_core.config import CoworkConfig, McpServerConfig
 from cowork_core.execenv import LocalDirExecEnv, ManagedExecEnv
 from cowork_core.sessions import SqliteCoworkSessionService
 from cowork_core.skills import SkillRegistry, register_skill_tools
@@ -70,6 +70,28 @@ class SkillInstallError(Exception):
     """Raised by ``install_skill_zip`` / ``uninstall_skill`` for any
     user-facing validation failure. The server maps this to HTTP 400
     with the exception message as the detail."""
+
+
+class MCPInstallError(Exception):
+    """Raised by ``save_mcp_server`` / ``delete_mcp_server`` /
+    ``dry_run_mcp_server`` for any user-facing failure (invalid
+    name, dry-run connection failure, attempted bundled delete).
+    Server maps to HTTP 400."""
+
+
+# Same shape as ``_SKILL_NAME_PATTERN`` — letters / digits / dash /
+# underscore, leading-alnum, capped at 64 chars. MCP server names land
+# in URLs (``DELETE /v1/mcp/servers/{name}``) and JSON keys, so
+# enforce a tight character set.
+_MCP_NAME_PATTERN = __import__("re").compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+
+
+def _validate_mcp_name(name: str) -> None:
+    if not _MCP_NAME_PATTERN.match(name):
+        raise MCPInstallError(
+            f"invalid MCP server name {name!r} "
+            f"(must match ``[A-Za-z0-9][A-Za-z0-9_-]{{0,63}}``)",
+        )
 
 
 @dataclass
@@ -539,6 +561,133 @@ class CoworkRuntime:
             shutil.rmtree(resolved)
         self.reload_skills()
 
+    # ── MCP server management ────────────────────────────────────────
+
+    def list_mcp_servers(self) -> dict[str, tuple["McpServerConfig", MCPServerStatus]]:
+        """Return ``{name: (config, status)}`` for every configured
+        server (bundled + user). Used by ``GET /v1/mcp/servers``."""
+        effective = _effective_mcp_servers(self.cfg, self.workspace)
+        out: dict[str, tuple[McpServerConfig, MCPServerStatus]] = {}
+        for name, server_cfg in effective.items():
+            status = self.mcp_status.get(name) or MCPServerStatus(
+                name=name,
+                status="error",
+                last_error="not yet built",
+                transport=server_cfg.transport,
+            )
+            out[name] = (server_cfg, status)
+        return out
+
+    async def dry_run_mcp_server(
+        self, server_cfg: "McpServerConfig",
+    ) -> list[str]:
+        """Connect to the configured server, list its tools, and
+        disconnect. Returns the discovered tool names so the
+        add-server form can offer them as ``tool_filter`` options.
+
+        Raises ``MCPInstallError`` on any failure. Doesn't touch
+        ``self.mcp_status`` or persist anything — purely a probe.
+        """
+        toolset, error = build_mcp_toolset(server_cfg)
+        if toolset is None:
+            raise MCPInstallError(error or "failed to build toolset")
+        try:
+            tools = await toolset.get_tools()
+            return [t.name for t in tools]
+        except Exception as exc:
+            raise MCPInstallError(f"{type(exc).__name__}: {exc}") from exc
+        finally:
+            try:
+                await toolset.close()
+            except Exception:
+                pass
+
+    def save_mcp_server(self, name: str, server_cfg: "McpServerConfig") -> None:
+        """Add or update a user MCP server. Validates the name shape
+        and refuses bundled-name collisions. Writes
+        ``<workspace>/global/mcp/servers.json``; the change takes
+        effect on the next ``restart_mcp()`` call."""
+        _validate_mcp_name(name)
+        # A collision with a TOML-declared (bundled) server is an
+        # override — we let it through. Settings UI flags the
+        # override visually.
+        servers_path = _user_mcp_servers_path(self.workspace)
+        current = _load_user_mcp_servers(servers_path)
+        # Coerce ``bundled`` to False — user-saved servers are never
+        # bundled, regardless of what the caller passed.
+        cleaned = server_cfg.model_copy(update={"bundled": False})
+        current[name] = cleaned
+        _save_user_mcp_servers(servers_path, current)
+
+    def delete_mcp_server(self, name: str) -> None:
+        """Remove a user MCP server. Refuses bundled servers
+        (those declared in ``cowork.toml``); the change takes effect
+        on the next ``restart_mcp()`` call."""
+        _validate_mcp_name(name)
+        # Bundled-or-not is judged by whether the *effective* entry
+        # has ``bundled=True``. A user can override a bundled name
+        # via JSON; deleting that user override is fine — it falls
+        # back to the TOML default.
+        servers_path = _user_mcp_servers_path(self.workspace)
+        current = _load_user_mcp_servers(servers_path)
+        if name not in current:
+            # Either unknown or bundled-only. Distinguish for the
+            # route's error message.
+            if name in self.cfg.mcp_servers:
+                raise MCPInstallError(
+                    f"cannot delete bundled MCP server {name!r} "
+                    f"(declared in cowork.toml; edit the file instead)",
+                )
+            raise MCPInstallError(f"unknown MCP server: {name!r}")
+        del current[name]
+        _save_user_mcp_servers(servers_path, current)
+
+    def restart_mcp(self) -> None:
+        """Tear down current MCP toolsets and re-mount from the
+        effective config. Replaces ``self.mcp_status`` and the
+        runner's root agent in place; ``session_service`` is
+        preserved so existing sessions stay reachable.
+
+        v1 trade-off: in-flight turns terminate when the agent's
+        tool list mutates underneath them. The Settings UI confirms
+        before calling this. Future: hot-swap without runner
+        rebuild — Tier F.
+        """
+        # Build a fresh agent + Runner with the new MCP toolsets.
+        agent_tools: list[Any] = list(self.tools.as_list())
+        effective = _effective_mcp_servers(self.cfg, self.workspace)
+        new_status: dict[str, MCPServerStatus] = {}
+        for name, mcp_cfg in effective.items():
+            toolset, error = build_mcp_toolset(mcp_cfg)
+            if toolset is not None:
+                agent_tools.append(toolset)
+                new_status[name] = MCPServerStatus(
+                    name=name, status="ok", transport=mcp_cfg.transport,
+                )
+            else:
+                new_status[name] = MCPServerStatus(
+                    name=name,
+                    status="error",
+                    last_error=error,
+                    transport=mcp_cfg.transport,
+                )
+        new_agent = build_root_agent(
+            self.cfg,
+            tools=agent_tools,
+            skills_snippet=self.skills.injection_snippet(),
+            skills=self.skills,
+        )
+        # Keep the existing session_service (and therefore live
+        # sessions); just give it a new agent. ADK's Runner accepts
+        # this composition pattern.
+        new_runner = Runner(
+            app_name=APP_NAME,
+            agent=new_agent,
+            session_service=self.session_service,
+        )
+        self.runner = new_runner
+        self.mcp_status = new_status
+
     async def delete_local_session(
         self,
         workdir: Path,
@@ -941,6 +1090,88 @@ def _user_skills_dir(workspace: Workspace) -> Path:
     return workspace.root / "global" / "skills"
 
 
+def _user_mcp_servers_path(workspace: Workspace) -> Path:
+    """JSON file under ``<workspace>/global/mcp/servers.json`` where
+    runtime-added MCP server configs are persisted. Mirrors the skills
+    layout (workspace-global, writable from the server, separate from
+    static ``cowork.toml``)."""
+    return workspace.root / "global" / "mcp" / "servers.json"
+
+
+def _load_user_mcp_servers(path: Path) -> dict[str, "McpServerConfig"]:
+    """Read the user-managed MCP server file. Missing file or empty
+    JSON is returned as an empty dict — never an error — so a fresh
+    workspace doesn't fail to boot."""
+    from cowork_core.config import McpServerConfig
+
+    if not path.is_file():
+        return {}
+    import json
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, McpServerConfig] = {}
+    for name, payload in raw.items():
+        if not isinstance(name, str) or not isinstance(payload, dict):
+            continue
+        try:
+            # User entries are never bundled by definition.
+            payload.pop("bundled", None)
+            out[name] = McpServerConfig(**payload, bundled=False)
+        except Exception:
+            # Skip malformed entries so one bad config doesn't break
+            # boot; the next reload after the user fixes the JSON
+            # will pick it up.
+            continue
+    return out
+
+
+def _save_user_mcp_servers(
+    path: Path,
+    servers: dict[str, "McpServerConfig"],
+) -> None:
+    """Write the user-managed MCP server file atomically (temp +
+    rename) so a crash mid-write doesn't leave a half-truncated JSON
+    that fails to parse on next boot."""
+    import json
+    import os
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        name: cfg.model_dump(exclude={"bundled"}) for name, cfg in servers.items()
+    }
+    tmp = path.with_suffix(path.suffix + f".tmp-{os.getpid()}")
+    tmp.write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def _effective_mcp_servers(
+    cfg: CoworkConfig, workspace: Workspace,
+) -> dict[str, "McpServerConfig"]:
+    """Merge TOML-declared servers (treated as ``bundled=True``) with
+    the user-managed ``servers.json`` file. User entries override
+    TOML on name collision — same scan-last-wins rule the skills
+    registry uses for project / workdir overlays.
+    """
+    out: dict[str, "McpServerConfig"] = {}
+    for name, mcp_cfg in cfg.mcp_servers.items():
+        # TOML-declared entries are bundled defaults: not removable
+        # via the runtime API even though they came from a user-edited
+        # file. The user can edit cowork.toml manually if they want
+        # to change them.
+        out[name] = mcp_cfg.model_copy(update={"bundled": True})
+    user_servers = _load_user_mcp_servers(_user_mcp_servers_path(workspace))
+    for name, user_cfg in user_servers.items():
+        out[name] = user_cfg
+    return out
+
+
 def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     if cfg.runtime.backend != "local":
         raise NotImplementedError(
@@ -973,8 +1204,9 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
     # status so /v1/health and Settings can surface failures rather
     # than silently dropping a misconfigured server.
     agent_tools: list[Any] = list(tool_registry.as_list())
+    effective_servers = _effective_mcp_servers(cfg, workspace)
     mcp_status: dict[str, MCPServerStatus] = {}
-    for name, mcp_cfg in cfg.mcp_servers.items():
+    for name, mcp_cfg in effective_servers.items():
         toolset, error = build_mcp_toolset(mcp_cfg)
         if toolset is not None:
             agent_tools.append(toolset)

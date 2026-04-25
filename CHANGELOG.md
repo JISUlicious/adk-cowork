@@ -210,3 +210,35 @@ Documentation overhaul (S3):
 - update README.md — new "API reference" section pointing at /docs, /redoc, /openapi.json
 - update ARCHITECTURE.md §2 — note OpenAPI publishing and Pydantic model location
 - update SPEC.md §2.7 — mention OpenAPI / Swagger surface
+
+### Skills + MCP production hardening (2026-04-23 → 2026-04-24)
+
+Slice I — skills operational completeness (commit 6a963a8):
+- update cowork_core/skills/loader.py — accept optional `version` + `triggers` frontmatter, compute SHA-256 `content_hash`, reject control chars in string fields
+- add cowork_core/skills/bundled/plot/scripts/quick_chart.py + xlsx-basic/scripts/table_io.py — exercise the scripts/ contract against real bundled content
+- add cowork_server validate route — `POST /v1/skills/validate` runs the full install pipeline without persisting; returns `SkillInfo` on success, 400 on rejection
+- update SkillInfo (server + types.ts) — add `version`, `triggers`, `content_hash`
+- update Settings → Skills — render version pill + sha-256 tooltip
+- add docs/WRITING_A_SKILL.md — frontmatter schema, on-disk layout, install/uninstall/validate flows, Claude-Code compatibility note
+- add tests/test_skills.py — 7 new tests (28 total)
+
+Slice III — MCP transports + tool_filter + status surface (commit c28dfb9):
+- update cowork_core/config.py McpServerConfig — add `transport` (`stdio`/`sse`/`http`), `url`, `headers`, `tool_filter`, `description`, `bundled` fields
+- rename `_build_mcp_toolset` → public `build_mcp_toolset(cfg) -> (toolset, last_error)` in cowork_core/agents/root_agent.py — dispatch on transport, switch to non-deprecated `McpToolset`
+- add cowork_core/runner.py MCPServerStatus dataclass + `CoworkRuntime.mcp_status` populated during build
+- add cowork_server `MCPServerStatusInfo` Pydantic model + HealthResponse.mcp list — `/v1/health` now surfaces per-server ok/error + last_error
+- update Settings → System — render MCP servers row with green/red counts and last_error tooltip
+- add tests/test_mcp.py — 7 transport / status tests; extend tests/test_openapi.py — verify HealthResponse.mcp `$ref` to MCPServerStatusInfo
+
+Slice IV — MCP dynamic config + CRUD routes + Settings UI + restart (this commit):
+- add cowork_core/runner.py `_user_mcp_servers_path` / `_load_user_mcp_servers` / `_save_user_mcp_servers` / `_effective_mcp_servers` — TOML (bundled) + `<workspace>/global/mcp/servers.json` (user) merge with user-overrides-bundled-on-collision
+- add CoworkRuntime methods: `list_mcp_servers`, `dry_run_mcp_server`, `save_mcp_server`, `delete_mcp_server`, `restart_mcp` — restart rebuilds agent + Runner in place, preserving `session_service`
+- add MCPInstallError + `_validate_mcp_name` (alphanumeric / `_-`, ≤64 chars) — same error shape as skills install
+- add cowork_server/api_models.py models: `McpServerInfo`, `McpServerRecord`, `McpServersListResponse`, `AddMcpServerRequest`, `AddMcpServerResponse`, `DeleteMcpServerResult`, `RestartMcpResult`
+- add cowork_server routes: `GET/POST /v1/mcp/servers`, `DELETE /v1/mcp/servers/{name}`, `POST /v1/mcp/restart` — POST dry-runs the connection (and returns discovered tool names) before persisting; DELETE refuses `bundled` with 400, unknown with 404
+- add new `mcp` openapi tag — Swagger Authorize + tag-grouping invariant
+- add cowork-web client methods: `listMcpServers`, `addMcpServer`, `deleteMcpServer`, `restartMcp` + matching types (`McpServerInfo`, `McpServerRecord`, `AddMcpServerRequest`, `AddMcpServerResponse`)
+- add Settings → Agents → MCP servers subsection — per-row status pill + transport badge + delete button (gated on `bundled`), inline "+ add server" form (transport selector, command/args/env or url/headers, description), "↻ restart" with confirm
+- extend tests/test_mcp.py — 5 new tests (file-backed CRUD round-trip, bundled-delete refusal, 404 on unknown delete, restart rebuilds status); 12 total in test_mcp.py, 231 total
+- update README.md — new feature row "MCP: dynamic config (servers.json) + add / delete / restart routes + Settings UI"
+- update ARCHITECTURE.md — extend MCP paragraph with two-scope merge model, dry-run-on-POST, restart-only reload contract

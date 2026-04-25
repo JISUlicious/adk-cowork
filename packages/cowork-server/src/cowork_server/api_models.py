@@ -88,6 +88,81 @@ class MCPServerStatusInfo(BaseModel):
     transport: Literal["stdio", "sse", "http"] = "stdio"
 
 
+class McpServerInfo(BaseModel):
+    """Public representation of an MCP server config for the
+    /v1/mcp/servers list. Mirrors ``cowork_core.config.McpServerConfig``
+    but with the ``bundled`` flag exposed so Settings can disable
+    the delete affordance on bundled (TOML-declared) entries."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    transport: Literal["stdio", "sse", "http"] = "stdio"
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    tool_filter: list[str] | None = None
+    description: str = ""
+    bundled: bool = False
+
+
+class McpServerRecord(BaseModel):
+    """One entry in the /v1/mcp/servers list — config + live
+    status, ready to render directly in the Settings UI."""
+
+    server: McpServerInfo
+    status: MCPServerStatusInfo
+
+
+class McpServersListResponse(BaseModel):
+    servers: list[McpServerRecord]
+
+
+class AddMcpServerRequest(BaseModel):
+    """Body for POST /v1/mcp/servers. ``name`` is the registry
+    key; the rest mirrors McpServerConfig. Server validates the
+    name shape, dry-runs the connection, and persists to
+    <workspace>/global/mcp/servers.json."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    transport: Literal["stdio", "sse", "http"] = "stdio"
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    tool_filter: list[str] | None = None
+    description: str = ""
+
+
+class AddMcpServerResponse(BaseModel):
+    """Result of POST /v1/mcp/servers. ``server`` reflects the
+    saved config; ``tools`` is the dry-run-discovered tool name
+    list — Settings shows it so the user can pick a narrower
+    ``tool_filter`` and re-save. The change does **not** take
+    effect until POST /v1/mcp/restart fires."""
+
+    server: McpServerInfo
+    tools: list[str]
+
+
+class DeleteMcpServerResult(BaseModel):
+    name: str
+    status: str  # always ``"deleted"``
+
+
+class RestartMcpResult(BaseModel):
+    """Return shape for POST /v1/mcp/restart. ``servers`` mirrors
+    /v1/health.mcp post-restart so the UI can refresh the status
+    pills without a second request."""
+
+    servers: list[MCPServerStatusInfo]
+
+
 class HealthResponse(BaseModel):
     status: str
     backend: str
@@ -352,6 +427,9 @@ __all__ = [
     # health + skills + mcp
     "CompactionInfo", "HealthResponse", "MCPServerStatusInfo", "SkillInfo",
     "InstallSkillResult", "ValidateSkillResult", "DeleteSkillResult",
+    "McpServerInfo", "McpServerRecord", "McpServersListResponse",
+    "AddMcpServerRequest", "AddMcpServerResponse", "DeleteMcpServerResult",
+    "RestartMcpResult",
     # projects
     "ProjectInfo", "CreateProjectRequest", "DeleteResponse",
     # sessions

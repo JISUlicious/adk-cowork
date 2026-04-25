@@ -88,21 +88,34 @@ agent's prompt registry line is re-read from
 static string) so newly-installed skills appear in the next
 turn's prompt without a process restart.
 
-**MCP servers.** Configured under `[[mcp_servers]]` in
-`cowork.toml`; each entry has a `transport` (`stdio` /
-`sse` / `http`), connection details (`command + args + env`
-for stdio, `url + headers` for sse + http), an optional
-`tool_filter` to whitelist specific tool names, and a
-`description`. `build_runtime` constructs each toolset via
-`build_mcp_toolset(cfg)` which dispatches on transport and
-returns `(toolset, last_error)`. Per-server outcome lands on
+**MCP servers.** Two scopes: `[[mcp_servers]]` in `cowork.toml`
+declares **bundled** servers (immutable from the API), and
+`<workspace>/global/mcp/servers.json` holds **user** servers
+(CRUD via `/v1/mcp/servers`). `build_runtime` merges both via
+`_effective_mcp_servers()` — user entries override bundled ones
+on name collision, mirroring the skills four-scope rule. Each
+server has a `transport` (`stdio` / `sse` / `http`), connection
+details (`command + args + env` for stdio, `url + headers` for
+sse + http), an optional `tool_filter` to whitelist specific tool
+names, and a `description`. Toolset construction goes through
+`build_mcp_toolset(cfg)` which dispatches on transport and returns
+`(toolset, last_error)`. Per-server outcome lands on
 `CoworkRuntime.mcp_status: dict[name, MCPServerStatus]` — exposed
 via `/v1/health.mcp` so Settings → System can show green/red
-counts and surface `last_error` on hover. The previously-silent
-failure path now produces a structured error message.
-Hot-swapping mid-process is **not** supported in v1; changes to
-`cowork.toml` or to a future `<workspace>/global/mcp/servers.json`
-take effect on the next runner start (see Slice IV plan).
+counts and surface `last_error` on hover.
+
+Settings → Agents → MCP servers renders the merged list (bundled
+locked, user deletable), an "+ add server" form that POSTs to
+`/v1/mcp/servers` (server-side dry-run validates the connection
+and returns the discovered tool list before persisting), and a
+"↻ restart" button that calls `/v1/mcp/restart`. Restart is the
+v1 reload mechanism — it tears down current toolsets, rebuilds
+from the merged config, and replaces `runtime.runner` in place
+while preserving `session_service` so existing sessions stay
+reachable. Hot-swap **without** restart is explicitly not
+supported in v1: ADK's `Runner` owns the toolset lifecycle and
+mid-call mutations risk stale tool references. The UI confirms
+("in-flight turns terminate") before calling.
 
 The same pane → routes mapping is auto-published as an OpenAPI
 schema at `/openapi.json` (Swagger UI at `/docs`, ReDoc at
