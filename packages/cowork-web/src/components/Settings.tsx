@@ -480,10 +480,14 @@ function SecWorkspace() {
 /* ───────────────────── Agents ───────────────────── */
 
 const AGENT_ROSTER = [
-  { id: "researcher", name: "Ada", role: "research", about: "gathers sources, summarizes findings" },
-  { id: "writer", name: "Orson", role: "writer", about: "drafts, revises, narrative" },
-  { id: "analyst", name: "Iris", role: "analysis", about: "tables, charts, numbers" },
-  { id: "reviewer", name: "Kit", role: "review", about: "edits, sanity-checks, runs commands" },
+  { id: "researcher", name: "Ada",   role: "research",  about: "gathers sources, summarizes findings" },
+  { id: "writer",     name: "Orson", role: "writer",    about: "drafts, revises, narrative" },
+  { id: "analyst",    name: "Iris",  role: "analysis",  about: "tables, charts, numbers" },
+  { id: "reviewer",   name: "Kit",   role: "review",    about: "edits, style, sanity-checks" },
+  // W3 — three new specialists
+  { id: "explorer",   name: "Finn",  role: "explore",   about: "fast read-only navigator (where is X / list every Y)" },
+  { id: "planner",    name: "Pat",   role: "plan",      about: "writes a step-by-step plan to scratch/plan.md" },
+  { id: "verifier",   name: "Vera",  role: "verify",    about: "adversarial probes, returns PASS/FAIL/PARTIAL" },
 ];
 
 function SecAgents({
@@ -862,7 +866,7 @@ function SecTools({
           label={<span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>{t}</span>}
           sub={describeTool(t)}
         >
-          <AgentStack agents={["researcher", "writer", "analyst", "reviewer"]} size={16} />
+          <AgentStack agents={["researcher", "writer", "analyst", "reviewer", "explorer", "planner", "verifier"]} size={16} />
         </Field>
       ))}
       <McpServersBlock

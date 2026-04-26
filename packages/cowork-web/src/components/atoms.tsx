@@ -2,7 +2,7 @@
  * Shared atoms for the warm-editorial UI.
  *
  * Wraps `lucide-react` with a name-keyed ``Icon`` and supplies the
- * agent-identity primitives (``Mono``, ``AgentStack``) — Cowork's four
+ * agent-identity primitives (``Mono``, ``AgentStack``) — Cowork's seven
  * specialist agents map to fixed hues: researcher=Ada (260),
  * writer=Orson (30), analyst=Iris (160), reviewer=Kit (310). Anything
  * else (root, unknown) falls back to neutral ink.
@@ -110,6 +110,13 @@ const AGENT_STYLE: Record<string, { letter: string; color: string; soft: string 
   iris:       { letter: "I", color: "var(--iris)", soft: "var(--iris-soft)" },
   reviewer:   { letter: "R", color: "var(--kit)", soft: "var(--kit-soft)" },
   kit:        { letter: "K", color: "var(--kit)", soft: "var(--kit-soft)" },
+  // W3 — explorer / planner / verifier
+  explorer:   { letter: "E", color: "var(--finn)", soft: "var(--finn-soft)" },
+  finn:       { letter: "F", color: "var(--finn)", soft: "var(--finn-soft)" },
+  planner:    { letter: "P", color: "var(--pat)",  soft: "var(--pat-soft)"  },
+  pat:        { letter: "P", color: "var(--pat)",  soft: "var(--pat-soft)"  },
+  verifier:   { letter: "V", color: "var(--vera)", soft: "var(--vera-soft)" },
+  vera:       { letter: "V", color: "var(--vera)", soft: "var(--vera-soft)" },
 };
 
 const NEUTRAL = { letter: "·", color: "var(--ink-3)", soft: "var(--paper-3)" };

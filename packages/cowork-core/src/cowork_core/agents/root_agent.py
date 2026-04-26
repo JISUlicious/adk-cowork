@@ -118,13 +118,28 @@ appropriate sub-agents in sequence.
 AT_MENTION_PROTOCOL = """\
 User-directed routing:
 If the user's message begins with ``@<agent_name>`` (e.g. ``@researcher``,
-``@writer``, ``@analyst``, ``@reviewer``), transfer to that sub-agent on the
-first move. Do not answer yourself first. The mentioned sub-agent should
-strip the ``@<agent_name>`` prefix from the message and respond to the
-actual request.
+``@writer``, ``@analyst``, ``@reviewer``, ``@explorer``, ``@planner``,
+``@verifier``), transfer to that sub-agent on the first move. Do not
+answer yourself first. The mentioned sub-agent should strip the
+``@<agent_name>`` prefix from the message and respond to the actual
+request.
 
 If the name doesn't match a known sub-agent, acknowledge the typo and
 handle the request yourself.
+
+Auto-routing triggers (delegate without waiting for ``@``-mention):
+- "find / locate / where is / list every …" → ``explorer``
+- "plan / what would you do / outline the steps / break this down" → ``planner``
+- "verify / check correctness / does this actually work / run the
+  formulas" → ``verifier``
+- "research / gather / cite sources / summarize what's known" → ``researcher``
+- "draft / write / compose / revise the document" → ``writer``
+- "analyze / chart / table / compute / pivot the data" → ``analyst``
+- "review / proofread / does this read well" → ``reviewer``
+
+Pick the closest match; if uncertain, prefer the more specialized agent
+(``planner`` over yourself for any planning, ``verifier`` over yourself
+for any correctness check).
 """
 
 # W1 — built-in sub-agent defaults. Keyed by agent name; each entry is
@@ -146,20 +161,28 @@ PLAN_MODE_ADDENDUM = """\
 
 ## PLAN MODE — ACTIVE
 
-You are in **plan mode**. You MUST NOT execute any actions that modify files
-or run commands. Instead:
+You are in **plan mode**. You MUST NOT execute any actions that modify
+files or run commands.
 
-1. **Read** existing files and research as needed to understand the request.
-2. **Write a plan** to `scratch/plan.md` describing exactly what you would do:
-   - List every file you would create or modify, with a brief description.
-   - List every shell command you would run.
-   - List every sub-agent you would delegate to and why.
-   - Note any risks, assumptions, or questions for the user.
-3. **Stop** after writing the plan. Do not proceed to execution.
+**Default behaviour: delegate to the ``planner`` sub-agent on the
+first turn.** The planner is read-only by design (config-time gate)
+and writes the final plan to `scratch/plan.md`. Transferring to it is
+strictly safer than handling the planning yourself.
 
-The user will review your plan, and may switch to work mode to execute it.
-Use `fs_write` to save the plan to `scratch/plan.md` — this is the ONE write
-operation allowed in plan mode.
+Skip the delegation and write the plan yourself only when:
+- the planner has already returned a plan this turn and the user
+  asked you to refine it inline; or
+- the planner sub-agent is somehow unavailable (e.g. an edge-case
+  test harness with no sub-agents wired).
+
+When you do write the plan yourself, follow the same shape: list every
+file you would create or modify, every shell command you would run,
+every sub-agent you would delegate to and why, plus risks /
+assumptions / questions. Save it via `fs_write` to `scratch/plan.md`
+— that is the ONE write operation allowed in plan mode.
+
+Stop after the plan is saved. The user will review it and may switch
+to work mode to execute.
 """
 
 

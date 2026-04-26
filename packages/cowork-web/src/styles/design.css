@@ -62,6 +62,13 @@
   --iris-soft: oklch(0.92 0.035 160);
   --kit: oklch(0.45 0.10 310);
   --kit-soft: oklch(0.92 0.035 310);
+  /* W3 — three new specialists */
+  --finn: oklch(0.55 0.11 200);   /* explorer (cool teal) */
+  --finn-soft: oklch(0.92 0.035 200);
+  --pat: oklch(0.50 0.10 90);     /* planner (warm olive) */
+  --pat-soft: oklch(0.92 0.035 90);
+  --vera: oklch(0.50 0.13 360);   /* verifier (red-violet) */
+  --vera-soft: oklch(0.92 0.035 360);
 
   /* type */
   --serif: 'Instrument Serif', 'Times New Roman', serif;
@@ -121,6 +128,9 @@
   --orson-soft: oklch(0.28 0.05 30);
   --iris-soft: oklch(0.28 0.05 160);
   --kit-soft: oklch(0.28 0.05 310);
+  --finn-soft: oklch(0.28 0.05 200);
+  --pat-soft: oklch(0.28 0.05 90);
+  --vera-soft: oklch(0.28 0.05 360);
 
   --shadow-sm: 0 1px 0 0 oklch(0.1 0.008 60 / 0.8);
   --shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 4px 12px oklch(0 0 0 / 0.3);
