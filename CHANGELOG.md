@@ -276,6 +276,36 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Skill marketplace via vercel-labs/skills — Slice V3 (2026-04-26)
+
+Online skill discovery + install. The Settings → Skills tab gets a
+"+ browse / install from source" panel: link out to skills.sh (the
+community catalog vercel-labs/skills points at) + an input box that
+takes a GitHub shorthand / URL / path. Backend shells out to
+`npx -y skills add <source> --target <tmp>`, walks the result for
+SKILL.md files, re-zips each, and runs them through the existing
+install pipeline (path-traversal guard, frontmatter validation,
+atomic temp + rename into `<workspace>/global/skills/<name>/`).
+
+A multi-skill source (a repo with several SKILL.md files) can land
+some + skip others on validation failures — the response surfaces
+both lists so the UI shows partial successes cleanly.
+
+- add `cowork_core/runner.py:CoworkRuntime.install_skills_from_source(source)` async method — verifies npx on PATH, spawns subprocess with 60s timeout + CI=true env (suppresses interactive prompts), walks tmp dir for SKILL.md, re-zips each with the frontmatter name as the top-level entry, calls existing `install_skill_zip` to keep all validation in one place. Returns `SkillInstallFromSourceResult(installed, skipped)`.
+- add `SkillInstallFromSourceResult` dataclass beside `SkillInstallError`
+- update `cowork_server/api_models.py` — `InstallSkillFromSourceRequest`, `InstallSkillSkipped`, `InstallSkillFromSourceResponse`
+- update `cowork_server/app.py`:
+  - new `_looks_like_github_shorthand(source)` helper (alphanumeric `owner/repo`, exactly one `/`, no scheme)
+  - new `POST /v1/skills/install-from-source` route under `skills` tag
+  - operator-gated in MU
+  - rejects local paths in MU (path would be on the operator's machine, not the user's)
+  - 503 surfaced cleanly when npx is absent
+- update `cowork-web/transport/types.ts` — `InstallSkillFromSourceRequest`, `InstallSkillSkipped`, `InstallSkillFromSourceResponse`
+- update `cowork-web/transport/client.ts` — `installSkillFromSource(source)` method
+- update `cowork-web/components/Settings.tsx` — new `<SkillBrowse>` collapsible panel above the existing skill list with link-out to skills.sh + source input + Install button + per-skill skipped list. Inserted into `SecTools` (the Agents & tools pane).
+- add `tests/test_skill_install_from_source.py` — 10 new tests using mocked subprocess (no Node dep, no network): `_looks_like_github_shorthand` recognises shorthand vs paths/URLs, runtime 503s when npx missing, single-skill source happy path, multi-skill source happy path, subprocess failure surfaces stderr, no-SKILL.md error, route 503/403/400 paths
+- 375 total tests green (was 365, +10)
+
 ### Live runtime reload — Slice V2 (POST /v1/runtime/reload) (2026-04-26)
 
 Lifts the "restart required" UX from "SSH in and restart the server"

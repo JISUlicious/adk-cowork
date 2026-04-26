@@ -246,6 +246,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Multi-user: operator gate + DB-backed workspace settings + (db)/(toml) source badges | Core / Server / Settings | wired | U1 |
 | Audit log: per-tool capture policy + SQLite sink + GET /v1/audit + Settings UI tail | Core / Server / Settings | wired | V1 |
 | Live runtime reload: POST /v1/runtime/reload + "Reload now" banner replaces restart-required UX | Core / Server / Settings | wired | V2 |
+| Skill marketplace: install via vercel-labs/skills (`npx skills add <source>`) + skills.sh discovery | Core / Server / Settings | wired | V3 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

@@ -523,6 +523,32 @@ class ConfigCompactionView(BaseModel):
     event_retention_size: int
 
 
+class InstallSkillFromSourceRequest(BaseModel):
+    """Body for ``POST /v1/skills/install-from-source`` (Slice V3).
+
+    ``source`` is passed verbatim to ``npx skills add <source>`` —
+    the vercel-labs/skills CLI accepts GitHub shorthand, full URLs,
+    and local paths."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source: str = Field(min_length=1, max_length=512)
+
+
+class InstallSkillSkipped(BaseModel):
+    """One skill skipped during install-from-source — the source
+    contained multiple SKILL.md files but this one failed
+    validation. Other skills in the same source may have installed."""
+
+    name: str
+    reason: str
+
+
+class InstallSkillFromSourceResponse(BaseModel):
+    installed: list[SkillInfo]
+    skipped: list[InstallSkillSkipped]
+
+
 class AuditEntry(BaseModel):
     """One row from ``GET /v1/audit`` (Slice V1).
 

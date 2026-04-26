@@ -913,6 +913,7 @@ function SecTools({
         Cowork; user-installed skills live under
         <code style={{ margin: "0 4px" }}>&lt;workspace&gt;/global/skills/</code>.
       </div>
+      <SkillBrowse client={client} onInstalled={refreshHealth} />
       {installError && (
         <div
           style={{
@@ -1037,6 +1038,172 @@ function SecTools({
  *  from the last toolset build, so the green/red pill matches what
  *  Settings → System renders. Bundled servers (declared in
  *  ``cowork.toml``) carry the lock icon — delete is gated. */
+/** Slice V3 — collapsible "Browse / install from source" panel
+ *  inside Settings → Skills. Two affordances side by side:
+ *
+ *  - link out to skills.sh (vercel-labs/skills' community catalog)
+ *    so the user can find skill repos
+ *  - input box + Install button that POSTs to
+ *    /v1/skills/install-from-source which shells out to
+ *    `npx skills add <source>` server-side
+ *
+ *  Operator-gated server-side in MU; the UI shows the panel either
+ *  way (the affordance is informational for non-operators) but the
+ *  Install POST will 403 cleanly. */
+function SkillBrowse({
+  client,
+  onInstalled,
+}: {
+  client: CoworkClient;
+  onInstalled: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [source, setSource] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<{
+    installed: number;
+    skipped: { name: string; reason: string }[];
+  } | null>(null);
+
+  const onInstall = async () => {
+    const trimmed = source.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    setError(null);
+    setLastResult(null);
+    try {
+      const result = await client.installSkillFromSource(trimmed);
+      setLastResult({
+        installed: result.installed.length,
+        skipped: result.skipped,
+      });
+      if (result.installed.length > 0) {
+        setSource("");
+        onInstalled();
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          fontFamily: "var(--mono)",
+          fontSize: 11,
+          padding: "3px 10px",
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--line)",
+          background: "var(--paper)",
+          color: "var(--ink-2)",
+          cursor: "pointer",
+          marginRight: 8,
+        }}
+        title="Browse + install community skills via vercel-labs/skills"
+      >
+        {open ? "− browse" : "+ browse / install from source"}
+      </button>
+      {open && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: 10,
+            background: "var(--paper-2)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-sm)",
+            fontSize: "var(--fs-xs)",
+          }}
+        >
+          <div style={{ marginBottom: 8 }}>
+            Discover community skills at{" "}
+            <a
+              href="https://skills.sh"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "var(--accent, #38a)" }}
+            >
+              skills.sh ↗
+            </a>
+            {" "}— the catalog vercel-labs/skills points at.
+          </div>
+          <Field
+            label="source"
+            sub={
+              <>
+                GitHub shorthand (
+                <code>vercel-labs/agent-skills</code>
+                ), full git URL, or local path. Server runs{" "}
+                <code>npx -y skills add</code>
+                ; requires Node + npm on PATH.
+              </>
+            }
+          >
+            <span
+              style={{
+                display: "inline-flex",
+                gap: 6,
+                width: "100%",
+                alignItems: "center",
+              }}
+            >
+              <input
+                type="text"
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                disabled={busy}
+                placeholder="vercel-labs/agent-skills"
+                style={editorInputStyle}
+              />
+              <button
+                type="button"
+                onClick={() => void onInstall()}
+                disabled={busy || !source.trim()}
+                style={editorBtnStyle(busy || !source.trim())}
+              >
+                {busy ? "installing…" : "Install"}
+              </button>
+            </span>
+          </Field>
+          {error && (
+            <div style={{ color: "var(--danger)", marginTop: 6 }}>
+              {error}
+            </div>
+          )}
+          {lastResult && lastResult.installed > 0 && (
+            <div style={{ color: "var(--ok, #2a7)", marginTop: 6 }}>
+              ✓ installed {lastResult.installed} skill
+              {lastResult.installed === 1 ? "" : "s"}
+              {lastResult.skipped.length > 0 &&
+                ` (${lastResult.skipped.length} skipped)`}
+            </div>
+          )}
+          {lastResult && lastResult.skipped.length > 0 && (
+            <ul
+              style={{
+                marginTop: 4,
+                paddingLeft: 18,
+                color: "var(--ink-3)",
+              }}
+            >
+              {lastResult.skipped.map((s, i) => (
+                <li key={i}>
+                  <code>{s.name}</code>: {s.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function McpServersBlock({
   client,
   sessionId,

@@ -196,6 +196,24 @@ export interface EffectiveConfig {
   source: Record<string, "db" | "toml" | string>;
 }
 
+/** Slice V3 — body for ``POST /v1/skills/install-from-source``.
+ *  ``source`` is passed verbatim to ``npx skills add <source>`` —
+ *  GitHub shorthand (``vercel-labs/agent-skills``), full URL, or
+ *  local path (SU only). */
+export interface InstallSkillFromSourceRequest {
+  source: string;
+}
+
+export interface InstallSkillSkipped {
+  name: string;
+  reason: string;
+}
+
+export interface InstallSkillFromSourceResponse {
+  installed: SkillInfo[];
+  skipped: InstallSkillSkipped[];
+}
+
 /** Slice V1 — one row from ``GET /v1/audit``. Settings → System
  *  surfaces a compact tail (latest N entries) so the operator can
  *  see at a glance what the agent has been doing.

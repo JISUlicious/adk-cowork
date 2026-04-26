@@ -85,6 +85,17 @@ _LOCAL_COWORK_DIR = ".cowork"
 _SKILL_NAME_PATTERN = __import__("re").compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
+@dataclass
+class SkillInstallFromSourceResult:
+    """V3 — return shape for ``install_skills_from_source``. A
+    single npx-skills source can produce N skills; some land, some
+    might be skipped on validation. The route surfaces both lists
+    so the UI can show partial successes."""
+
+    installed: list["Skill"] = field(default_factory=list)
+    skipped: list[dict[str, str]] = field(default_factory=list)
+
+
 class SkillInstallError(Exception):
     """Raised by ``install_skill_zip`` / ``uninstall_skill`` for any
     user-facing validation failure. The server maps this to HTTP 400
@@ -479,6 +490,133 @@ class CoworkRuntime:
                 f"installed skill {top!r} did not reappear in registry",
             )
         return installed
+
+    async def install_skills_from_source(
+        self, source: str, *, timeout_s: float = 60.0,
+    ) -> "SkillInstallFromSourceResult":
+        """Slice V3 — fetch + install skills via vercel-labs/skills.
+
+        Shells out to ``npx -y skills add <source> --target <tmp>``,
+        walks the temp dir for ``SKILL.md`` files, re-zips each, and
+        feeds them through the existing ``install_skill_zip``
+        validation pipeline. Source string accepts the shapes the
+        ``skills`` CLI does — GitHub shorthand, full URL, local path.
+
+        Returns ``(installed, skipped)`` so the UI can show partial
+        successes (a multi-skill source where one fails validation).
+        Raises ``SkillInstallError`` only on infrastructural failures
+        (npx missing, CLI failed altogether, no SKILL.md files
+        found).
+        """
+        import asyncio
+        import io
+        import os
+        import shutil
+        import tempfile
+        import zipfile
+
+        from cowork_core.skills import SkillLoadError, parse_skill_md
+
+        npx = shutil.which("npx")
+        if npx is None:
+            raise SkillInstallError(
+                "npx not found on PATH — install Node.js + npm to use "
+                "the skill marketplace (vercel-labs/skills)",
+            )
+        if not source or not source.strip():
+            raise SkillInstallError("source must be non-empty")
+
+        installed: list[Skill] = []
+        skipped: list[dict[str, str]] = []
+
+        with tempfile.TemporaryDirectory(prefix="cowork-skills-") as tmp:
+            tmp_path = Path(tmp)
+            env = {**os.environ, "CI": "true"}
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    npx, "-y", "skills", "add", source,
+                    "--target", str(tmp_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+            except OSError as exc:
+                raise SkillInstallError(
+                    f"failed to spawn npx: {exc}",
+                ) from exc
+
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout_s,
+                )
+            except asyncio.TimeoutError as exc:
+                proc.kill()
+                raise SkillInstallError(
+                    f"npx skills add timed out after {timeout_s}s",
+                ) from exc
+
+            if proc.returncode != 0:
+                stderr = stderr_bytes.decode("utf-8", errors="replace")
+                raise SkillInstallError(
+                    f"npx skills add failed (exit {proc.returncode}): "
+                    f"{stderr[:1024]}",
+                )
+
+            # Walk the tmp dir for SKILL.md files. Each one's parent
+            # directory IS the skill content — re-zip with the skill's
+            # frontmatter name as the top-level entry, then feed
+            # through the existing install pipeline.
+            skill_md_paths = sorted(tmp_path.rglob("SKILL.md"))
+            if not skill_md_paths:
+                raise SkillInstallError(
+                    f"no SKILL.md files found in source {source!r} "
+                    f"after npx skills add",
+                )
+
+            for skill_md in skill_md_paths:
+                skill_dir = skill_md.parent
+                # Parse frontmatter just to get the name; full
+                # validation runs again inside install_skill_zip.
+                try:
+                    parsed = parse_skill_md(skill_md)
+                except SkillLoadError as exc:
+                    skipped.append({
+                        "name": skill_dir.name,
+                        "reason": f"frontmatter parse failed: {exc}",
+                    })
+                    continue
+                # Re-zip with <name>/ as the top-level entry to
+                # match install_skill_zip's expected shape.
+                buf = io.BytesIO()
+                try:
+                    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for inner in skill_dir.rglob("*"):
+                            if inner.is_file():
+                                arcname = (
+                                    Path(parsed.name)
+                                    / inner.relative_to(skill_dir)
+                                )
+                                zf.write(inner, arcname.as_posix())
+                except OSError as exc:
+                    skipped.append({
+                        "name": parsed.name,
+                        "reason": f"re-zip failed: {exc}",
+                    })
+                    continue
+
+                try:
+                    skill = self.install_skill_zip(buf.getvalue())
+                    installed.append(skill)
+                except SkillInstallError as exc:
+                    skipped.append({
+                        "name": parsed.name,
+                        "reason": str(exc),
+                    })
+
+        return SkillInstallFromSourceResult(
+            installed=installed,
+            skipped=skipped,
+        )
 
     def validate_skill_zip(self, data: bytes) -> "Skill":
         """Dry-run install validation without writing to the

@@ -16,6 +16,7 @@ import type {
   ConfigModelPatch,
   ConfigModelView,
   EffectiveConfig,
+  InstallSkillFromSourceResponse,
   FileEntry,
   HealthInfo,
   LocalFileListResult,
@@ -194,6 +195,29 @@ export class CoworkClient {
     if (!r.ok) {
       const detail = await r.text();
       throw new Error(`installSkill: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
+  /** Slice V3 — install skills via vercel-labs/skills. Server
+   *  shells out to ``npx -y skills add <source> --target <tmp>``,
+   *  walks the result for ``SKILL.md`` files, validates each, and
+   *  atomic-renames into ``<workspace>/global/skills/<name>/``.
+   *  Operator-gated in MU. 503 if Node/npm aren't on PATH. */
+  async installSkillFromSource(
+    source: string,
+  ): Promise<InstallSkillFromSourceResponse> {
+    const r = await fetch(
+      `${this.baseUrl}/v1/skills/install-from-source`,
+      {
+        method: "POST",
+        headers: this.jsonHeaders(),
+        body: JSON.stringify({ source }),
+      },
+    );
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`installSkillFromSource: ${r.status} — ${detail}`);
     }
     return r.json();
   }

@@ -101,6 +101,8 @@ from cowork_server.api_models import (
     ConfigModelPatch,
     ConfigModelView,
     EffectiveConfig,
+    InstallSkillFromSourceRequest,
+    InstallSkillFromSourceResponse,
     McpDisabledResponse,
     MemoryPageContent,
     MemoryPageList,
@@ -120,6 +122,22 @@ from cowork_server.auth import UserIdentity, create_guard, generate_token
 from cowork_server.connections import InMemoryConnectionLimiter
 from cowork_server.queues import InMemoryEventBus
 from cowork_server.transport import event_to_payload, events_to_history
+
+
+def _looks_like_github_shorthand(source: str) -> bool:
+    """V3 helper — distinguish ``owner/repo`` (GitHub shorthand the
+    skills CLI accepts) from a local path. Heuristic: exactly one
+    ``/``, no scheme, no leading slash, no path-traversal, alphanumeric
+    + dash + underscore segments."""
+    import re
+
+    if "/" not in source or "://" in source:
+        return False
+    parts = source.split("/")
+    if len(parts) != 2:
+        return False
+    pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    return all(pattern.match(p) for p in parts)
 
 
 def _server_version() -> str:
@@ -819,6 +837,95 @@ def create_app(
                 raise HTTPException(status_code=404, detail=message) from exc
             raise HTTPException(status_code=400, detail=message) from exc
         return {"name": name, "status": "deleted"}
+
+    # ── Skill marketplace install (Slice V3, via vercel-labs/skills) ──
+
+    @app.post(
+        "/v1/skills/install-from-source",
+        tags=["skills"],
+        summary="Install skills via npx skills add <source>",
+        response_model=InstallSkillFromSourceResponse,
+    )
+    async def install_skills_from_source(
+        body: InstallSkillFromSourceRequest,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Slice V3 — wraps the vercel-labs/skills CLI.
+
+        ``source`` is one of: GitHub shorthand (``vercel-labs/agent-skills``),
+        a full git URL, or a local path. The server shells out to
+        ``npx -y skills add <source> --target <tmp>``, walks the
+        result for ``SKILL.md`` files, validates each through the
+        existing install pipeline, and atomic-renames into
+        ``<workspace>/global/skills/<name>/``.
+
+        Returns ``installed`` (the skills that landed) + ``skipped``
+        (per-skill reasons for any that failed validation). A multi-
+        skill source can produce a partial success.
+
+        Multi-user mode: operator-only — bulk-installing community
+        skills is a workspace-wide change. 503 if Node/npm aren't on
+        PATH (no npx). Local paths rejected in MU (the path would be
+        on the operator's machine, not the user's).
+        """
+        from cowork_server.auth import is_operator
+
+        if runtime.multi_user and not is_operator(cfg, user):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "skill install-from-source is operator-only in "
+                    "multi-user mode"
+                ),
+            )
+        # Reject local paths in MU — they refer to the operator's
+        # filesystem, not the calling user's, which is almost never
+        # what anyone wants. Heuristic: starts with ``/`` or ``./``
+        # or ``~`` or has no ``://`` and no ``/`` (which would be a
+        # GitHub shorthand).
+        source = body.source.strip()
+        if runtime.multi_user:
+            looks_like_path = (
+                source.startswith(("/", "./", "../", "~"))
+                or (
+                    "://" not in source
+                    and "/" in source
+                    and not _looks_like_github_shorthand(source)
+                )
+            )
+            if looks_like_path:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "local paths are not allowed in multi-user "
+                        "mode; use a GitHub repo or full URL"
+                    ),
+                )
+        try:
+            result = await runtime.install_skills_from_source(source)
+        except SkillInstallError as exc:
+            message = str(exc)
+            if "npx not found" in message:
+                raise HTTPException(status_code=503, detail=message) from exc
+            raise HTTPException(status_code=400, detail=message) from exc
+        return {
+            "installed": [
+                {
+                    "name": s.name,
+                    "description": s.description,
+                    "license": s.license,
+                    "source": s.source,
+                    "version": s.version,
+                    "triggers": list(s.triggers),
+                    "content_hash": s.content_hash,
+                }
+                for s in result.installed
+            ],
+            "skipped": [
+                {"name": item["name"], "reason": item["reason"]}
+                for item in result.skipped
+            ],
+        }
 
     # ── MCP server management (Slice IV) ──────────────────────────────
 
