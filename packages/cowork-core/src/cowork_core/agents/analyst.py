@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+# W1 — analyst leans on python_exec for everything. No shell, no email.
+ANALYST_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
+    "fs_read", "fs_write", "fs_glob", "fs_list", "fs_stat",
+    "fs_promote",
+    "python_exec_run",
+    "search_web", "http_fetch",
+    "load_skill",
+    "memory_read", "memory_write", "memory_log", "memory_remember",
+)
+
 ANALYST_INSTRUCTION = """\
 You are the Analyst, a sub-agent of the Cowork office copilot.
 

@@ -276,6 +276,51 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Hard tool gates + per-agent model override — Slice W1 (2026-04-26)
+
+Borrowing from Claude Code's built-in agent design (each agent declares
+`tools` / `disallowedTools` at registration time, and Explore runs on
+Haiku while writer-class agents run on the user's main model), W1 adds
+two primitives to Cowork's sub-agent factory.
+
+**Config-time hard tool gate.** Tier E.E1's `make_allowlist_callback`
+is session-state-driven — great for UX (flip from Settings, no
+restart) but a prompt-injected sub-agent could in principle PATCH its
+own state to widen the surface. New `make_static_agent_gate(agent_name,
+allowed, disallowed)` captures the allow/disallow sets at agent-build
+time and inspects only `tool.name` — no session state is consulted. It
+mounts as the FIRST entry in each sub-agent's `before_tool_callback`
+chain, ahead of E.E1's runtime allowlist. The two gates compose: a
+tool must pass BOTH. Users can *narrow* the surface from Settings,
+never *widen* past the static gate.
+
+**Built-in defaults per sub-agent.** Each module declares its own
+default allowlist as a tuple constant:
+
+- `researcher` — read-only fs + search/http + python_exec (for data
+  extraction). No mutation, no shell, no email send.
+- `writer` — fs mutation + python_exec + http/search + email_draft. No
+  shell.
+- `analyst` — fs mutation + python_exec for charts. No shell, no email.
+- `reviewer` — strictest: read-only fs + search + skill loads. No
+  python, no http, no mutation.
+
+**Per-agent model override.** New `cfg.agents.<name>.model: ModelConfig
+| None` swaps a sub-agent onto a different OpenAI-compatible endpoint.
+`None` inherits `cfg.model`. Closes the cost+speed gap for cheap
+read-only specialists (Explore-class agents) without forcing the whole
+session to run on a less capable model.
+
+- add `cowork_core/config.py:AgentConfig(allowed_tools, disallowed_tools, model)` and `CoworkConfig.agents: dict[str, AgentConfig]`
+- add `cowork_core/policy/permissions.py:make_static_agent_gate(agent_name, allowed_tools, disallowed_tools)` — captures at build time, inspects `tool.name` only, mounted first in the chain
+- add `*_DEFAULT_ALLOWED_TOOLS` constants in `agents/researcher.py`, `agents/writer.py`, `agents/analyst.py`, `agents/reviewer.py`
+- add `agents/root_agent.py:SUB_AGENT_DEFAULTS` aggregating the four built-in defaults
+- update `agents/root_agent.py:build_root_agent` — `_resolve_agent(name, default)` layers `cfg.agents[name]` over the default; sub-agent construction loops over `SUB_AGENT_DEFAULTS`; per-agent model from `build_model(agent_cfg.model or cfg.model)`
+- add `tests/test_agent_gates.py` — 14 new tests: gate behaviour (no allowlist, allow blocks non-listed, disallow overrides allow, gate ignores session state — the prompt-injection regression); defaults audit (all four agents present, researcher/reviewer/writer surfaces match design); `build_root_agent` wiring (root unrestricted, reviewer's default blocks fs_write, cfg.agents.disallowed_tools added on top, cfg.agents.allowed_tools replaces default); per-agent model override (root + writer keep primary, researcher swaps to cheap endpoint)
+- update `ARCHITECTURE.md` — new "Per-agent hard tool gates + model override (Slice W1)" subsection under §10
+- update `README.md` — feature row for W1
+- 401 total tests green (was 387, +14)
+
 ### Mitigations bundle — Slice V4 (TOML preservation + OCC + structured logging + cfg audit) (2026-04-26)
 
 Four small, targeted hardenings that close the rough edges around the

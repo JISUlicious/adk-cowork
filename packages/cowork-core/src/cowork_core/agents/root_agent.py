@@ -18,18 +18,31 @@ from google.adk.agents import LlmAgent
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.base_tool import BaseTool
 
-from cowork_core.agents.analyst import ANALYST_INSTRUCTION
-from cowork_core.agents.researcher import RESEARCHER_INSTRUCTION
-from cowork_core.agents.reviewer import REVIEWER_INSTRUCTION
-from cowork_core.agents.writer import WRITER_INSTRUCTION
+from cowork_core.agents.analyst import (
+    ANALYST_DEFAULT_ALLOWED_TOOLS,
+    ANALYST_INSTRUCTION,
+)
+from cowork_core.agents.researcher import (
+    RESEARCHER_DEFAULT_ALLOWED_TOOLS,
+    RESEARCHER_INSTRUCTION,
+)
+from cowork_core.agents.reviewer import (
+    REVIEWER_DEFAULT_ALLOWED_TOOLS,
+    REVIEWER_INSTRUCTION,
+)
+from cowork_core.agents.writer import (
+    WRITER_DEFAULT_ALLOWED_TOOLS,
+    WRITER_INSTRUCTION,
+)
 from cowork_core.callbacks import make_model_callbacks
-from cowork_core.config import CoworkConfig, McpServerConfig
+from cowork_core.config import AgentConfig, CoworkConfig, McpServerConfig
 from cowork_core.model.openai_compat import build_model
 from cowork_core.policy.hooks import make_audit_callbacks
 from cowork_core.policy.permissions import (
     make_allowlist_callback,
     make_mcp_disable_callback,
     make_permission_callback,
+    make_static_agent_gate,
 )
 from cowork_core.tools.base import (
     COWORK_AUTO_ROUTE_KEY,
@@ -92,6 +105,17 @@ actual request.
 If the name doesn't match a known sub-agent, acknowledge the typo and
 handle the request yourself.
 """
+
+# W1 — built-in sub-agent defaults. Keyed by agent name; each entry is
+# (default-allowed-tools-tuple, instruction-string). The ``cfg.agents.<name>``
+# config can override allowed_tools, add disallowed_tools, or swap the model.
+SUB_AGENT_DEFAULTS: dict[str, tuple[tuple[str, ...], str]] = {
+    "researcher": (RESEARCHER_DEFAULT_ALLOWED_TOOLS, RESEARCHER_INSTRUCTION),
+    "writer": (WRITER_DEFAULT_ALLOWED_TOOLS, WRITER_INSTRUCTION),
+    "analyst": (ANALYST_DEFAULT_ALLOWED_TOOLS, ANALYST_INSTRUCTION),
+    "reviewer": (REVIEWER_DEFAULT_ALLOWED_TOOLS, REVIEWER_INSTRUCTION),
+}
+
 
 PLAN_MODE_ADDENDUM = """\
 
@@ -313,12 +337,40 @@ def build_root_agent(
             memory_snippet=memory_snippet,
         )
 
-    model = build_model(cfg.model)
+    root_model = build_model(cfg.model)
     # MCP toolsets are appended to ``tools`` by ``build_runtime``
     # before this function is called, so per-server status can live on
     # ``CoworkRuntime.mcp_status``. ``build_root_agent`` itself stays
     # MCP-config-agnostic.
     adk_tools: list[Any] = list(tools or [])
+
+    def _resolve_agent(name: str, default_allowed: tuple[str, ...]) -> tuple[
+        Any,  # model (LiteLlm)
+        frozenset[str] | None,  # allowed_tools (None = no allowlist)
+        frozenset[str],  # disallowed_tools
+    ]:
+        """Layer cfg.agents[name] over the built-in defaults."""
+        agent_cfg: AgentConfig | None = cfg.agents.get(name)
+        # Model: explicit override beats inherited cfg.model.
+        if agent_cfg is not None and agent_cfg.model is not None:
+            agent_model = build_model(agent_cfg.model)
+        else:
+            agent_model = root_model
+        # Allowed tools: cfg override beats per-agent default. ``[]``
+        # is a valid override that silences the agent (no allowlisted
+        # tools); only ``None`` falls back to defaults.
+        if agent_cfg is not None and agent_cfg.allowed_tools is not None:
+            allowed = frozenset(agent_cfg.allowed_tools)
+        else:
+            allowed = frozenset(default_allowed)
+        # Disallowed tools: cfg additions only (defaults don't carry a
+        # disallow list — the allowlist already encodes the surface).
+        disallowed = (
+            frozenset(agent_cfg.disallowed_tools)
+            if agent_cfg is not None
+            else frozenset()
+        )
+        return agent_model, allowed, disallowed
 
     # Policy + audit + model callbacks — applied to every agent (root +
     # sub-agents) so plan-mode enforcement, audit logging, and turn-budget
@@ -348,60 +400,48 @@ def build_root_agent(
     root_before_tool_cbs = _with_mcp([permission_cb, audit_before])
     after_tool_cbs = [audit_after]
 
-    def _sub_before_tool(name: str) -> list[Any]:
-        return _with_mcp(
-            [make_allowlist_callback(name), permission_cb, audit_before],
-        )
+    def _sub_before_tool(
+        name: str,
+        allowed: frozenset[str] | None,
+        disallowed: frozenset[str],
+    ) -> list[Any]:
+        # W1 — static gate runs FIRST so config-time allow/deny holds
+        # even if an injected message flips the runtime allowlist.
+        return _with_mcp([
+            make_static_agent_gate(name, allowed, disallowed),
+            make_allowlist_callback(name),
+            permission_cb,
+            audit_before,
+        ])
 
-    # Sub-agents share the same model and tools; callbacks add a
-    # per-agent allowlist check as the first gate.
-    researcher = LlmAgent(
-        name="researcher",
-        model=model,
-        instruction=_sub_agent_instruction(RESEARCHER_INSTRUCTION),
-        tools=adk_tools,
-        before_tool_callback=_sub_before_tool("researcher"),
-        after_tool_callback=after_tool_cbs,
-        before_model_callback=before_model_cb,
-        after_model_callback=after_model_cb,
-    )
-    writer = LlmAgent(
-        name="writer",
-        model=model,
-        instruction=_sub_agent_instruction(WRITER_INSTRUCTION),
-        tools=adk_tools,
-        before_tool_callback=_sub_before_tool("writer"),
-        after_tool_callback=after_tool_cbs,
-        before_model_callback=before_model_cb,
-        after_model_callback=after_model_cb,
-    )
-    analyst = LlmAgent(
-        name="analyst",
-        model=model,
-        instruction=_sub_agent_instruction(ANALYST_INSTRUCTION),
-        tools=adk_tools,
-        before_tool_callback=_sub_before_tool("analyst"),
-        after_tool_callback=after_tool_cbs,
-        before_model_callback=before_model_cb,
-        after_model_callback=after_model_cb,
-    )
-    reviewer = LlmAgent(
-        name="reviewer",
-        model=model,
-        instruction=_sub_agent_instruction(REVIEWER_INSTRUCTION),
-        tools=adk_tools,
-        before_tool_callback=_sub_before_tool("reviewer"),
-        after_tool_callback=after_tool_cbs,
-        before_model_callback=before_model_cb,
-        after_model_callback=after_model_cb,
-    )
+    # Sub-agents share the tool list; per-agent model + allow/disallow
+    # are layered from ``cfg.agents.<name>`` on top of built-in defaults.
+    sub_agents: list[LlmAgent] = []
+    for sub_name, (default_allowed, instruction) in SUB_AGENT_DEFAULTS.items():
+        sub_model, allowed_set, disallowed_set = _resolve_agent(
+            sub_name, default_allowed,
+        )
+        sub_agents.append(
+            LlmAgent(
+                name=sub_name,
+                model=sub_model,
+                instruction=_sub_agent_instruction(instruction),
+                tools=adk_tools,
+                before_tool_callback=_sub_before_tool(
+                    sub_name, allowed_set, disallowed_set,
+                ),
+                after_tool_callback=after_tool_cbs,
+                before_model_callback=before_model_cb,
+                after_model_callback=after_model_cb,
+            )
+        )
 
     return LlmAgent(
         name="cowork_root",
-        model=model,
+        model=root_model,
         instruction=_dynamic_instruction,
         tools=adk_tools,
-        sub_agents=[researcher, writer, analyst, reviewer],
+        sub_agents=sub_agents,
         before_tool_callback=root_before_tool_cbs,
         after_tool_callback=after_tool_cbs,
         before_model_callback=before_model_cb,

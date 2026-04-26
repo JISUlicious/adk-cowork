@@ -503,6 +503,50 @@ runner). State reads inside the callback are cheap and ADK's
 (called from the HTTP PUT handler when no runner is active for
 the session).
 
+### Per-agent hard tool gates + model override (Slice W1)
+
+Tier E.E1's `make_allowlist_callback` is **session-state-driven** —
+the user can flip a sub-agent's surface from Settings without a
+restart. That's good for UX, but it means a prompt-injected sub-agent
+could in principle PATCH its own state via a tool that mutates session
+state and then call newly-allowed tools.
+
+W1 adds a **config-time hard gate** that captures the allow/disallow
+sets at agent-build time. `make_static_agent_gate(agent_name, allowed,
+disallowed)` (in `policy/permissions.py`) returns a callback that
+inspects the tool name only — no session state is consulted. It's
+mounted as the **first** entry in each sub-agent's
+`before_tool_callback` chain, so even a malicious flip of
+`COWORK_TOOL_ALLOWLIST_KEY` cannot expand the static gate.
+
+**Built-in defaults** live in each sub-agent module
+(`RESEARCHER_DEFAULT_ALLOWED_TOOLS`, etc.) and are aggregated in
+`agents/root_agent.py:SUB_AGENT_DEFAULTS`:
+
+- `researcher` — read-only fs + search/http + python_exec for data
+  extraction + memory tools. No `fs_write`, no shell, no email send.
+- `writer` — full fs mutation, `python_exec_run`, http/search,
+  `email_draft` (sending stays user-gated). No shell.
+- `analyst` — fs mutation + python_exec for charts. No shell, no email.
+- `reviewer` — strictest: read-only fs + search + skill loads. No
+  python, no http, no mutation.
+
+**Config-time override**: `cfg.agents.<name>` (typed as `AgentConfig`)
+takes:
+
+- `allowed_tools: list[str] | None` — `None` falls back to the per-agent
+  default; an explicit list (incl. `[]`) replaces the default wholesale.
+- `disallowed_tools: list[str]` — adds to the gate even when
+  `allowed_tools` is `None` (use default minus a few).
+- `model: ModelConfig | None` — full override. `None` inherits
+  `cfg.model`. Lets you put a cheap model behind the researcher /
+  explorer / planner without changing the writer / analyst's model.
+
+**Layering with E.E1**: static gate runs first; session-state allowlist
+runs after. To pass, a tool must satisfy BOTH gates. The user can
+*narrow* the surface from Settings (E.E1) but cannot *widen* it past
+the static gate (W1).
+
 ### `@`-mentions and auto-route (Tier E.E2)
 
 User types `@researcher gather sources on X`; researcher (not root)

@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+# W1 — config-time hard tool gate. Researcher is read-only by design;
+# this list excludes every mutation tool (fs_write/fs_edit/fs_promote,
+# shell_run, email_*) so prompt injection cannot upgrade its surface.
+# MCP tools are not subject to this gate (see ``build_root_agent``).
+RESEARCHER_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
+    "fs_read", "fs_glob", "fs_list", "fs_stat",
+    "search_web", "http_fetch",
+    "python_exec_run",  # for data extraction from PDFs etc.
+    "load_skill",
+    "memory_read", "memory_write", "memory_log", "memory_remember",
+)
+
 RESEARCHER_INSTRUCTION = """\
 You are the Researcher, a sub-agent of the Cowork office copilot.
 

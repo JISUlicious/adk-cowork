@@ -173,6 +173,58 @@ def make_permission_callback(
     return _check_permission
 
 
+def make_static_agent_gate(
+    agent_name: str,
+    allowed_tools: frozenset[str] | None,
+    disallowed_tools: frozenset[str],
+) -> Any:
+    """W1 — config-time hard gate enforced before any session-state
+    allowlist. Captures the allow/disallow sets at agent-build time so
+    a prompt-injected sub-agent that mutates its own session state
+    cannot escape them.
+
+    Semantics:
+    - ``tool.name in disallowed_tools`` → block (denylist wins).
+    - ``allowed_tools is None`` → no allowlist; pass everything not in
+      the denylist (full surface, useful when only blacklisting a few).
+    - ``tool.name not in allowed_tools`` (when ``allowed_tools`` is a
+      set) → block.
+
+    MCP tools are never gated here — the gate is mounted FIRST in the
+    chain, but it inspects ``tool.name`` only, and MCP tools live under
+    arbitrary names that the static config can't enumerate. The
+    ``mcp_disable`` callback already handles MCP-specific disablement.
+    Tool-name collisions between MCP and built-ins are extremely
+    unlikely; if they happen, that's an MCP-server design bug.
+    """
+
+    def _check(
+        tool: BaseTool,
+        _args: dict[str, Any],
+        _ctx: ToolContext,
+    ) -> dict[str, Any] | None:
+        name = tool.name
+        if name in disallowed_tools:
+            return {
+                "error": (
+                    f"Tool '{name}' is denied for agent '{agent_name}' "
+                    f"by configuration (cfg.agents.{agent_name}."
+                    f"disallowed_tools)."
+                ),
+            }
+        if allowed_tools is not None and name not in allowed_tools:
+            return {
+                "error": (
+                    f"Tool '{name}' is not in the allowlist for agent "
+                    f"'{agent_name}' (cfg.agents.{agent_name}."
+                    f"allowed_tools or per-agent default)."
+                ),
+            }
+        return None
+
+    return _check
+
+
 def make_allowlist_callback(agent_name: str) -> Any:
     """Return a ``before_tool_callback`` that enforces a per-agent
     tool allowlist from session state.

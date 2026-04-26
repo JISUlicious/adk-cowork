@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+# W1 — read-only by design. Strictest allowlist: no python_exec, no
+# http_fetch, no mutation tools. Reviewer reads + searches only.
+REVIEWER_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
+    "fs_read", "fs_glob", "fs_list", "fs_stat",
+    "search_web",
+    "load_skill",
+    "memory_read", "memory_log",
+)
+
 REVIEWER_INSTRUCTION = """\
 You are the Reviewer, a sub-agent of the Cowork office copilot.
 

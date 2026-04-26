@@ -185,6 +185,33 @@ class CompactionConfig(BaseModel):
     so recent turns remain verbatim in the agent's context."""
 
 
+class AgentConfig(BaseModel):
+    """W1 — per-agent hard tool gate + optional model override.
+
+    Distinct from the runtime ``COWORK_TOOL_ALLOWLIST_KEY`` session
+    state (Tier E.E1, user-tweakable from Settings). This config-time
+    gate is enforced by ``make_static_agent_gate`` BEFORE the runtime
+    allowlist; even a prompt-injected sub-agent that flips its own
+    session-state allowlist cannot escape the disallow set or the
+    config-time allow set.
+
+    - ``allowed_tools``: optional explicit allowlist. ``None`` = use
+      the per-agent default (defined per sub-agent module). Set to
+      an explicit list to override; set to ``[]`` to silence the
+      agent entirely (no tools).
+    - ``disallowed_tools``: explicit denylist; checked first. Useful
+      for ``allowed_tools = None`` (full default surface) minus a few
+      tools.
+    - ``model``: optional override (full ``ModelConfig`` so a cheaper
+      base_url + model name can be set per agent — e.g. Haiku for an
+      Explore agent). ``None`` = inherit ``cfg.model``.
+    """
+
+    allowed_tools: list[str] | None = None
+    disallowed_tools: list[str] = Field(default_factory=list)
+    model: ModelConfig | None = None
+
+
 class StorageConfig(BaseModel):
     """Slice S1 — pluggable storage backend for multi-user mode.
 
@@ -217,6 +244,7 @@ class CoworkConfig(BaseModel):
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    agents: dict[str, AgentConfig] = Field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> CoworkConfig:
