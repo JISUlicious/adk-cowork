@@ -276,6 +276,52 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Settings UI — Slice T2 (Profile + System editors + Memory tab) (2026-04-26)
+
+User-visible payoff for T1's backend. The Settings overlay grows
+three editable surfaces wired to the new routes.
+
+- update `transport/types.ts` — `ConfigModelPatch/View`,
+  `ConfigCompactionPatch/View`, `UserProfile/Patch`,
+  `MemoryPageInfo/List/Content`. `HealthInfo` gains optional
+  `is_multi_user` + `has_config_file`.
+- update `transport/client.ts` — 7 new methods:
+  `updateConfigModel`, `updateConfigCompaction`, `getProfile`,
+  `updateProfile`, `listMemoryPages`, `readMemoryPage`,
+  `deleteMemoryPage`.
+- update `components/Settings.tsx`:
+  - **Profile** — replace read-only `SecProfile` with an editable
+    form (display_name + email). user_id stays read-only. Save +
+    Reset buttons; ✓ saved tick on success; error inline. Loads
+    via `getProfile()` on mount.
+  - **System** — extract two new sub-blocks above the existing
+    health rows:
+    - `SecConfigModel` — base_url, model, api_key inputs. The
+      api_key input branches: `env:` prefix renders as plain text
+      with an "env-resolved" badge; otherwise masked password
+      with a show/hide toggle.
+    - `SecConfigCompaction` — number inputs + checkbox; child
+      inputs disabled when `enabled=false`.
+    - Both blocks send only changed fields (PATCH semantics).
+    - On save: a yellow "Restart required" banner pins to the top
+      of the System tab with a Dismiss link.
+    - In multi-user mode OR env-only mode: every input renders
+      `disabled` with a small notice ("configured by operator —
+      edit cowork.toml on the server and restart" / "server is in
+      env-only mode — set COWORK_CONFIG_PATH and restart").
+    - Existing read-only Status / Tools loaded / Skills loaded /
+      MCP servers / Backends rows remain. Read-only Model +
+      Compaction rows removed (the editors own those now).
+  - **Memory** — new tab between Approvals and System under the
+    Agents group. Scope picker (`<Chips>` user/project), page list
+    with name + size + 80-char preview, view (inline expansion),
+    delete (with confirm), refresh button. Project scope without
+    an active session shows "Open a session to browse project
+    memory."
+  - New `TabId = "memory"` and `NAV` entry with the brain icon.
+  - `editorInputStyle` + `editorBtnStyle` shared style helpers.
+- web build clean. Backend tests still green (305).
+
 ### Settings UI — Slice T1 (backend + atomic TOML writer) (2026-04-26)
 
 Backend foundation for in-app settings editing. Seven new routes

@@ -10,6 +10,10 @@ import type {
   AddMcpServerRequest,
   AddMcpServerResponse,
   AdkEvent,
+  ConfigCompactionPatch,
+  ConfigCompactionView,
+  ConfigModelPatch,
+  ConfigModelView,
   FileEntry,
   HealthInfo,
   LocalFileListResult,
@@ -17,6 +21,8 @@ import type {
   LocalSessionListItem,
   MCPServerStatusInfo,
   McpServerRecord,
+  MemoryPageContent,
+  MemoryPageList,
   Notification,
   PolicyMode,
   ProjectInfo,
@@ -28,6 +34,8 @@ import type {
   ToolAllowlist,
   ToolApprovalResult,
   UploadFileResult,
+  UserProfile,
+  UserProfilePatch,
 } from "./types";
 
 export type EventHandler = (ev: AdkEvent) => void;
@@ -448,6 +456,117 @@ export class CoworkClient {
     );
     if (!r.ok) throw new Error(`setSessionMcpDisabled: ${r.status}`);
     return ((await r.json()).disabled ?? []) as string[];
+  }
+
+  /* ───────── Settings (Slice T1/T2) — config + profile + memory ───────── */
+
+  /** Update ``[model]`` in ``cowork.toml``. Single-user only —
+   *  multi-user returns 403, env-only mode returns 503. Takes effect
+   *  on next server restart; UI shows a "restart required" banner. */
+  async updateConfigModel(patch: ConfigModelPatch): Promise<ConfigModelView> {
+    const r = await fetch(`${this.baseUrl}/v1/config/model`, {
+      method: "PUT",
+      headers: this.jsonHeaders(),
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`updateConfigModel: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
+  async updateConfigCompaction(
+    patch: ConfigCompactionPatch,
+  ): Promise<ConfigCompactionView> {
+    const r = await fetch(`${this.baseUrl}/v1/config/compaction`, {
+      method: "PUT",
+      headers: this.jsonHeaders(),
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`updateConfigCompaction: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
+  /** Per-user profile read. ``user_id`` comes from the auth token —
+   *  the server sources it, not the body. ``display_name`` and
+   *  ``email`` default to empty strings when unset. */
+  async getProfile(): Promise<UserProfile> {
+    const r = await fetch(`${this.baseUrl}/v1/profile`, {
+      headers: this.jsonHeaders(),
+    });
+    if (!r.ok) throw new Error(`getProfile: ${r.status}`);
+    return r.json();
+  }
+
+  async updateProfile(patch: UserProfilePatch): Promise<UserProfile> {
+    const r = await fetch(`${this.baseUrl}/v1/profile`, {
+      method: "PUT",
+      headers: this.jsonHeaders(),
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`updateProfile: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
+  /** List memory pages for a scope. ``project`` scope requires
+   *  ``sessionId`` so the route can resolve which project to query. */
+  async listMemoryPages(
+    scope: "user" | "project",
+    sessionId?: string,
+  ): Promise<MemoryPageList> {
+    const qs = sessionId
+      ? `?session_id=${encodeURIComponent(sessionId)}`
+      : "";
+    const r = await fetch(
+      `${this.baseUrl}/v1/memory/${scope}/pages${qs}`,
+      { headers: this.jsonHeaders() },
+    );
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`listMemoryPages: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
+  async readMemoryPage(
+    scope: "user" | "project",
+    name: string,
+    sessionId?: string,
+  ): Promise<MemoryPageContent> {
+    const qs = sessionId
+      ? `?session_id=${encodeURIComponent(sessionId)}`
+      : "";
+    const r = await fetch(
+      `${this.baseUrl}/v1/memory/${scope}/pages/${encodeURI(name)}${qs}`,
+      { headers: this.jsonHeaders() },
+    );
+    if (!r.ok) throw new Error(`readMemoryPage: ${r.status}`);
+    return r.json();
+  }
+
+  async deleteMemoryPage(
+    scope: "user" | "project",
+    name: string,
+    sessionId?: string,
+  ): Promise<void> {
+    const qs = sessionId
+      ? `?session_id=${encodeURIComponent(sessionId)}`
+      : "";
+    const r = await fetch(
+      `${this.baseUrl}/v1/memory/${scope}/pages/${encodeURI(name)}${qs}`,
+      { method: "DELETE", headers: this.authHeaders() },
+    );
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`deleteMemoryPage: ${r.status} — ${detail}`);
+    }
   }
 
   /**

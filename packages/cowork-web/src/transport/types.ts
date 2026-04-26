@@ -166,6 +166,68 @@ export interface HealthInfo {
   skills: SkillInfo[];
   mcp?: MCPServerStatusInfo[];
   compaction?: CompactionSettings;
+  /** Slice T1 — multi-user mode? Settings UI uses this to render
+   *  workspace-wide config (model, compaction) read-only when true.
+   *  Defaults to false on older servers that haven't been upgraded. */
+  is_multi_user?: boolean;
+  /** Slice T1 — server has a ``cowork.toml`` on disk (started with
+   *  ``COWORK_CONFIG_PATH``). When false, Settings renders the
+   *  config blocks read-only with an "env-only mode" notice. */
+  has_config_file?: boolean;
+}
+
+/* ───────── Settings UI editors (Slice T1/T2) ───────── */
+
+/** Body for ``PUT /v1/config/model``. ``null`` / missing fields are
+ *  preserved in the on-disk TOML; only set fields overwrite. */
+export interface ConfigModelPatch {
+  base_url?: string;
+  model?: string;
+  api_key?: string;
+}
+
+export interface ConfigModelView {
+  base_url: string;
+  model: string;
+  api_key: string;
+}
+
+export interface ConfigCompactionPatch {
+  enabled?: boolean;
+  compaction_interval?: number;
+  overlap_size?: number;
+  token_threshold?: number;
+  event_retention_size?: number;
+}
+
+export type ConfigCompactionView = Required<ConfigCompactionPatch>;
+
+export interface UserProfile {
+  user_id: string;
+  display_name: string;
+  email: string;
+}
+
+export interface UserProfilePatch {
+  display_name?: string;
+  email?: string;
+}
+
+export interface MemoryPageInfo {
+  name: string;
+  size: number;
+  preview: string;
+}
+
+export interface MemoryPageList {
+  scope: "user" | "project" | string;
+  pages: MemoryPageInfo[];
+}
+
+export interface MemoryPageContent {
+  scope: string;
+  name: string;
+  content: string;
 }
 
 export interface ProjectInfo {

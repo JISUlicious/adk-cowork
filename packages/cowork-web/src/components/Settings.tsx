@@ -19,11 +19,15 @@ import { useEffect, useRef, useState } from "react";
 import type { CoworkClient } from "../transport/client";
 import type {
   AddMcpServerRequest,
+  ConfigCompactionPatch,
+  ConfigModelPatch,
   HealthInfo,
   McpServerRecord,
   McpTransport,
+  MemoryPageInfo,
   PolicyMode,
   PythonExecPolicy,
+  UserProfile,
 } from "../transport/types";
 import { usePreferences } from "../preferences";
 import {
@@ -49,6 +53,7 @@ type TabId =
   | "workspace"
   | "agents"
   | "approvals"
+  | "memory"
   | "system"
   | "appearance";
 
@@ -68,6 +73,9 @@ const NAV: { group: string; items: { id: TabId; label: string; icon: string }[] 
       // both sourced from ``/v1/health``.
       { id: "agents", label: "Agents & tools", icon: "brain" },
       { id: "approvals", label: "Approvals policy", icon: "shield" },
+      // Slice T2 — memory page management. Adjacent to Skills + MCP
+      // conceptually (all three are agent-facing knowledge surfaces).
+      { id: "memory", label: "Memory", icon: "brain" },
     ],
   },
   {
@@ -123,7 +131,7 @@ export function Settings({ client, sessionId, userId, surface, onClose }: Props)
             ))}
           </nav>
           <div className="content">
-            {tab === "profile" && <SecProfile userId={userId} />}
+            {tab === "profile" && <SecProfile client={client} userId={userId} />}
             {tab === "workspace" && <SecWorkspace />}
             {tab === "agents" && (
               <>
@@ -136,6 +144,7 @@ export function Settings({ client, sessionId, userId, surface, onClose }: Props)
               </>
             )}
             {tab === "approvals" && <SecApprovals client={client} sessionId={sessionId} />}
+            {tab === "memory" && <SecMemory client={client} sessionId={sessionId} />}
             {tab === "system" && <SecSystem client={client} />}
             {tab === "appearance" && <SecAppearance />}
           </div>
@@ -147,18 +156,176 @@ export function Settings({ client, sessionId, userId, surface, onClose }: Props)
 
 /* ───────────────────── Account ───────────────────── */
 
-function SecProfile({ userId }: { userId?: string }) {
+function SecProfile({
+  client,
+  userId,
+}: {
+  client: CoworkClient;
+  userId?: string;
+}) {
+  // Slice T2 — editable display name + email. user_id stays
+  // read-only (sourced from the auth token). Profile persists in the
+  // calling user's UserStore at ``settings/profile.json`` so multi-
+  // user mode keeps each user's name/email isolated.
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedTick, setSavedTick] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    client
+      .getProfile()
+      .then((p) => {
+        if (cancelled) return;
+        setProfile(p);
+        setDisplayName(p.display_name);
+        setEmail(p.email);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
+  const dirty =
+    profile !== null &&
+    (displayName !== profile.display_name || email !== profile.email);
+
+  const onSave = async () => {
+    if (!dirty || busy) return;
+    setBusy(true);
+    setError(null);
+    setSavedTick(false);
+    try {
+      const next = await client.updateProfile({
+        display_name: displayName,
+        email,
+      });
+      setProfile(next);
+      setSavedTick(true);
+      window.setTimeout(() => setSavedTick(false), 1500);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onReset = () => {
+    if (!profile) return;
+    setDisplayName(profile.display_name);
+    setEmail(profile.email);
+    setError(null);
+  };
+
   return (
     <div className="sec">
       <h3>Profile</h3>
       <div className="desc">
         Identity is taken from the API token you authenticated with.
+        Display name and email persist per user — in multi-user mode
+        each authenticated user has their own profile.
       </div>
-      <Field label="User id">
-        <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>{userId ?? "local"}</span>
+      <Field label="User id" sub="From your auth token. Read-only.">
+        <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
+          {profile?.user_id ?? userId ?? "local"}
+        </span>
       </Field>
+      <Field
+        label="Display name"
+        sub="Shown in chat in place of your raw user id."
+      >
+        <input
+          type="text"
+          value={displayName}
+          maxLength={80}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder="(unset)"
+          style={editorInputStyle}
+        />
+      </Field>
+      <Field label="Email" sub="Used for future notifications.">
+        <input
+          type="email"
+          value={email}
+          maxLength={200}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="(unset)"
+          style={editorInputStyle}
+        />
+      </Field>
+      {error && (
+        <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)" }}>
+          {error}
+        </div>
+      )}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          marginTop: 4,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => void onSave()}
+          disabled={!dirty || busy}
+          style={editorBtnStyle(busy || !dirty)}
+        >
+          {busy ? "saving…" : "Save"}
+        </button>
+        <button
+          type="button"
+          onClick={onReset}
+          disabled={!dirty || busy}
+          style={editorBtnStyle(!dirty)}
+        >
+          Reset
+        </button>
+        {savedTick && (
+          <span
+            style={{
+              fontSize: "var(--fs-xs)",
+              color: "var(--ok, #2a7)",
+              fontFamily: "var(--mono)",
+            }}
+          >
+            ✓ saved
+          </span>
+        )}
+      </div>
     </div>
   );
+}
+
+const editorInputStyle: React.CSSProperties = {
+  width: "100%",
+  fontFamily: "var(--mono)",
+  fontSize: 12,
+  padding: "4px 6px",
+  borderRadius: "var(--radius-sm)",
+  border: "1px solid var(--line)",
+  background: "var(--paper)",
+  color: "var(--ink-1)",
+};
+
+function editorBtnStyle(disabled: boolean): React.CSSProperties {
+  return {
+    fontFamily: "var(--mono)",
+    fontSize: 11,
+    padding: "3px 12px",
+    borderRadius: "var(--radius-sm)",
+    border: "1px solid var(--line)",
+    background: "var(--paper)",
+    color: disabled ? "var(--ink-4)" : "var(--ink-2)",
+    cursor: disabled ? "not-allowed" : "pointer",
+  };
 }
 
 function SecWorkspace() {
@@ -1430,13 +1597,29 @@ function SecApprovals({ client, sessionId }: { client: CoworkClient; sessionId: 
 function SecSystem({ client }: { client: CoworkClient }) {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Slice T2 — sticky banner on saving. Cleared by Dismiss.
+  const [restartBanner, setRestartBanner] = useState(false);
 
-  useEffect(() => {
+  const refreshHealth = () => {
     client
       .health()
       .then(setHealth)
       .catch((e) => setError(String(e)));
+  };
+
+  useEffect(() => {
+    refreshHealth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
+
+  const isMu = health?.is_multi_user === true;
+  const hasConfigFile = health?.has_config_file === true;
+  const editsBlocked = isMu || !hasConfigFile;
+  const editsBlockedReason = isMu
+    ? "configured by operator — edit cowork.toml on the server and restart"
+    : !hasConfigFile
+    ? "server is in env-only mode (no cowork.toml on disk) — set COWORK_CONFIG_PATH and restart"
+    : "";
 
   return (
     <div className="sec">
@@ -1447,26 +1630,68 @@ function SecSystem({ client }: { client: CoworkClient }) {
         and Tier E will introduce Redis / Postgres adapters behind the same
         protocols.
       </div>
+      {restartBanner && (
+        <div
+          style={{
+            background: "var(--paper-2)",
+            border: "1px solid var(--warn, #c80)",
+            color: "var(--warn, #c80)",
+            padding: "6px 10px",
+            borderRadius: "var(--radius-sm)",
+            fontSize: "var(--fs-xs)",
+            marginBottom: 12,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span>
+            ⚠ Restart required — config edits take effect on next
+            server restart.
+          </span>
+          <button
+            type="button"
+            onClick={() => setRestartBanner(false)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--warn, #c80)",
+              cursor: "pointer",
+              fontSize: "var(--fs-xs)",
+              textDecoration: "underline",
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      <SecConfigModel
+        client={client}
+        health={health}
+        editsBlocked={editsBlocked}
+        editsBlockedReason={editsBlockedReason}
+        onSaved={() => {
+          setRestartBanner(true);
+          refreshHealth();
+        }}
+      />
+      <SecConfigCompaction
+        client={client}
+        health={health}
+        editsBlocked={editsBlocked}
+        editsBlockedReason={editsBlockedReason}
+        onSaved={() => {
+          setRestartBanner(true);
+          refreshHealth();
+        }}
+      />
       <Field label="Status">
         {error ? (
           <span style={{ color: "var(--danger)" }}>{error}</span>
         ) : (
           <span style={{ color: "var(--ok)" }}>● {health?.status ?? "unknown"}</span>
         )}
-      </Field>
-      <Field label="Model" sub="Active LLM identifier from cowork.toml.">
-        <span
-          style={{
-            fontFamily: "var(--mono)",
-            fontSize: "var(--fs-sm)",
-            color: "var(--ink-2)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-          title={health?.model ?? ""}
-        >
-          {health?.model ?? "—"}
-        </span>
       </Field>
       <Field label="Tools loaded">
         <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
@@ -1518,22 +1743,607 @@ function SecSystem({ client }: { client: CoworkClient }) {
           local in-memory (event bus · limiter · sessions)
         </span>
       </Field>
-      <Field
-        label="Compaction"
-        sub="ADK's sliding-window + token-threshold summary of old invocations. Keeps long sessions within the model's context window."
-      >
-        {health?.compaction ? (
-          <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
-            {health.compaction.enabled
-              ? `every ${health.compaction.compaction_interval} turns · overlap ${health.compaction.overlap_size} · >${health.compaction.token_threshold} tokens · keep last ${health.compaction.event_retention_size}`
-              : "disabled"}
-          </span>
-        ) : (
-          <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)", color: "var(--ink-4)" }}>
-            —
-          </span>
-        )}
+    </div>
+  );
+}
+
+/* ───────── Settings → System sub-blocks (Slice T2) ───────── */
+
+function SecConfigModel({
+  client,
+  health,
+  editsBlocked,
+  editsBlockedReason,
+  onSaved,
+}: {
+  client: CoworkClient;
+  health: HealthInfo | null;
+  editsBlocked: boolean;
+  editsBlockedReason: string;
+  onSaved: () => void;
+}) {
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [origBaseUrl, setOrigBaseUrl] = useState("");
+  const [origModel, setOrigModel] = useState("");
+  const [origApiKey, setOrigApiKey] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Bootstrap from /v1/health.model — that's all we have for the
+  // current model identifier. base_url + api_key aren't in health
+  // (avoiding accidental leak); we read on first PUT-success echo
+  // OR show empty until the user types. To populate them up-front
+  // we'd need a GET /v1/config/model route; deferred.
+  useEffect(() => {
+    if (health?.model && !origModel) {
+      setModel(health.model);
+      setOrigModel(health.model);
+    }
+  }, [health?.model, origModel]);
+
+  const apiKeyIsEnvRef = apiKey.startsWith("env:");
+  const dirty =
+    baseUrl !== origBaseUrl ||
+    model !== origModel ||
+    apiKey !== origApiKey;
+
+  const onSave = async () => {
+    if (!dirty || busy || editsBlocked) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Only send fields the user touched, so an empty input on a
+      // pre-existing config field doesn't accidentally clobber the
+      // server's stored value.
+      const patch: ConfigModelPatch = {};
+      if (baseUrl !== origBaseUrl) patch.base_url = baseUrl;
+      if (model !== origModel) patch.model = model;
+      if (apiKey !== origApiKey) patch.api_key = apiKey;
+      const view = await client.updateConfigModel(patch);
+      setBaseUrl(view.base_url);
+      setModel(view.model);
+      setApiKey(view.api_key);
+      setOrigBaseUrl(view.base_url);
+      setOrigModel(view.model);
+      setOrigApiKey(view.api_key);
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onReset = () => {
+    setBaseUrl(origBaseUrl);
+    setModel(origModel);
+    setApiKey(origApiKey);
+    setError(null);
+  };
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <h4 style={{ margin: "0 0 4px 0", fontSize: "var(--fs-md)" }}>
+        Model endpoint
+      </h4>
+      <div className="desc">
+        OpenAI-compatible HTTP API. ``base_url`` is the API root,
+        ``model`` is the identifier sent on each request, ``api_key``
+        is either a literal secret or an{" "}
+        <code style={{ margin: "0 4px" }}>env:VAR</code> reference
+        Cowork resolves at consumption time.
+      </div>
+      {editsBlocked && (
+        <div
+          style={{
+            fontSize: "var(--fs-xs)",
+            color: "var(--ink-3)",
+            background: "var(--paper-2)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-sm)",
+            padding: "4px 8px",
+            margin: "0 0 8px 0",
+          }}
+        >
+          {editsBlockedReason}
+        </div>
+      )}
+      <Field label="base_url">
+        <input
+          type="text"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          disabled={editsBlocked || busy}
+          placeholder={origBaseUrl || "http://localhost:18000/v1"}
+          style={editorInputStyle}
+        />
       </Field>
+      <Field label="model">
+        <input
+          type="text"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          disabled={editsBlocked || busy}
+          placeholder="(unset)"
+          style={editorInputStyle}
+        />
+      </Field>
+      <Field
+        label={
+          <span>
+            api_key
+            {apiKeyIsEnvRef && (
+              <span
+                style={{
+                  marginLeft: 6,
+                  fontSize: 10,
+                  fontFamily: "var(--mono)",
+                  color: "var(--ink-3)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 3,
+                  padding: "1px 4px",
+                }}
+              >
+                env-resolved
+              </span>
+            )}
+          </span>
+        }
+        sub={
+          apiKeyIsEnvRef
+            ? "env: prefix — Cowork reads the actual secret from the named environment variable at runtime."
+            : "Plaintext secret stored in cowork.toml. Prefer env:VAR for production."
+        }
+      >
+        <span style={{ display: "inline-flex", gap: 6, width: "100%" }}>
+          <input
+            type={apiKeyIsEnvRef || showSecret ? "text" : "password"}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            disabled={editsBlocked || busy}
+            placeholder={origApiKey || "env:OPENAI_API_KEY"}
+            style={{ ...editorInputStyle, flex: 1 }}
+          />
+          {!apiKeyIsEnvRef && apiKey && (
+            <button
+              type="button"
+              onClick={() => setShowSecret((v) => !v)}
+              style={editorBtnStyle(false)}
+              title={showSecret ? "Hide secret" : "Show secret"}
+            >
+              {showSecret ? "hide" : "show"}
+            </button>
+          )}
+        </span>
+      </Field>
+      {error && (
+        <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)" }}>
+          {error}
+        </div>
+      )}
+      {!editsBlocked && (
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            disabled={!dirty || busy}
+            style={editorBtnStyle(busy || !dirty)}
+          >
+            {busy ? "saving…" : "Save model"}
+          </button>
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={!dirty || busy}
+            style={editorBtnStyle(!dirty)}
+          >
+            Reset
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SecConfigCompaction({
+  client,
+  health,
+  editsBlocked,
+  editsBlockedReason,
+  onSaved,
+}: {
+  client: CoworkClient;
+  health: HealthInfo | null;
+  editsBlocked: boolean;
+  editsBlockedReason: string;
+  onSaved: () => void;
+}) {
+  const c = health?.compaction;
+  const [enabled, setEnabled] = useState<boolean>(c?.enabled ?? true);
+  const [interval, setInterval] = useState<number>(c?.compaction_interval ?? 6);
+  const [overlap, setOverlap] = useState<number>(c?.overlap_size ?? 1);
+  const [tokenThreshold, setTokenThreshold] = useState<number>(
+    c?.token_threshold ?? 32000,
+  );
+  const [retention, setRetention] = useState<number>(
+    c?.event_retention_size ?? 20,
+  );
+  const [orig, setOrig] = useState({
+    enabled: c?.enabled ?? true,
+    interval: c?.compaction_interval ?? 6,
+    overlap: c?.overlap_size ?? 1,
+    tokenThreshold: c?.token_threshold ?? 32000,
+    retention: c?.event_retention_size ?? 20,
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!c) return;
+    setEnabled(c.enabled);
+    setInterval(c.compaction_interval);
+    setOverlap(c.overlap_size);
+    setTokenThreshold(c.token_threshold);
+    setRetention(c.event_retention_size);
+    setOrig({
+      enabled: c.enabled,
+      interval: c.compaction_interval,
+      overlap: c.overlap_size,
+      tokenThreshold: c.token_threshold,
+      retention: c.event_retention_size,
+    });
+  }, [
+    c?.enabled,
+    c?.compaction_interval,
+    c?.overlap_size,
+    c?.token_threshold,
+    c?.event_retention_size,
+  ]);
+
+  const dirty =
+    enabled !== orig.enabled ||
+    interval !== orig.interval ||
+    overlap !== orig.overlap ||
+    tokenThreshold !== orig.tokenThreshold ||
+    retention !== orig.retention;
+
+  const onSave = async () => {
+    if (!dirty || busy || editsBlocked) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const patch: ConfigCompactionPatch = {};
+      if (enabled !== orig.enabled) patch.enabled = enabled;
+      if (interval !== orig.interval) patch.compaction_interval = interval;
+      if (overlap !== orig.overlap) patch.overlap_size = overlap;
+      if (tokenThreshold !== orig.tokenThreshold) patch.token_threshold = tokenThreshold;
+      if (retention !== orig.retention) patch.event_retention_size = retention;
+      await client.updateConfigCompaction(patch);
+      setOrig({ enabled, interval, overlap, tokenThreshold, retention });
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onReset = () => {
+    setEnabled(orig.enabled);
+    setInterval(orig.interval);
+    setOverlap(orig.overlap);
+    setTokenThreshold(orig.tokenThreshold);
+    setRetention(orig.retention);
+    setError(null);
+  };
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <h4 style={{ margin: "0 0 4px 0", fontSize: "var(--fs-md)" }}>
+        Compaction
+      </h4>
+      <div className="desc">
+        ADK's sliding-window + token-threshold summary of old
+        invocations. Keeps long sessions within the model's context
+        window. ``compaction_interval`` triggers every N turns;
+        ``token_threshold`` triggers mid-turn when context grows
+        past N tokens.
+      </div>
+      {editsBlocked && (
+        <div
+          style={{
+            fontSize: "var(--fs-xs)",
+            color: "var(--ink-3)",
+            background: "var(--paper-2)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-sm)",
+            padding: "4px 8px",
+            margin: "0 0 8px 0",
+          }}
+        >
+          {editsBlockedReason}
+        </div>
+      )}
+      <Field label="enabled">
+        <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            disabled={editsBlocked || busy}
+          />
+          <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
+            {enabled ? "on" : "off"}
+          </span>
+        </label>
+      </Field>
+      <Field label="compaction_interval" sub="Min 1.">
+        <input
+          type="number"
+          value={interval}
+          min={1}
+          onChange={(e) => setInterval(Number(e.target.value) || 1)}
+          disabled={editsBlocked || busy || !enabled}
+          style={editorInputStyle}
+        />
+      </Field>
+      <Field label="overlap_size" sub="Min 0.">
+        <input
+          type="number"
+          value={overlap}
+          min={0}
+          onChange={(e) => setOverlap(Number(e.target.value) || 0)}
+          disabled={editsBlocked || busy || !enabled}
+          style={editorInputStyle}
+        />
+      </Field>
+      <Field label="token_threshold" sub="Min 1.">
+        <input
+          type="number"
+          value={tokenThreshold}
+          min={1}
+          onChange={(e) => setTokenThreshold(Number(e.target.value) || 1)}
+          disabled={editsBlocked || busy || !enabled}
+          style={editorInputStyle}
+        />
+      </Field>
+      <Field label="event_retention_size" sub="Min 0.">
+        <input
+          type="number"
+          value={retention}
+          min={0}
+          onChange={(e) => setRetention(Number(e.target.value) || 0)}
+          disabled={editsBlocked || busy || !enabled}
+          style={editorInputStyle}
+        />
+      </Field>
+      {error && (
+        <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)" }}>
+          {error}
+        </div>
+      )}
+      {!editsBlocked && (
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button
+            type="button"
+            onClick={() => void onSave()}
+            disabled={!dirty || busy}
+            style={editorBtnStyle(busy || !dirty)}
+          >
+            {busy ? "saving…" : "Save compaction"}
+          </button>
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={!dirty || busy}
+            style={editorBtnStyle(!dirty)}
+          >
+            Reset
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───────── Settings → Memory tab (Slice T2) ───────── */
+
+function SecMemory({
+  client,
+  sessionId,
+}: {
+  client: CoworkClient;
+  sessionId: string | null;
+}) {
+  const [scope, setScope] = useState<"user" | "project">("project");
+  const [pages, setPages] = useState<MemoryPageInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [content, setContent] = useState<string>("");
+
+  const refresh = () => {
+    setError(null);
+    setExpanded(null);
+    setContent("");
+    if (scope === "project" && !sessionId) {
+      setPages([]);
+      setError("Open a session to browse project memory.");
+      return;
+    }
+    client
+      .listMemoryPages(scope, sessionId ?? undefined)
+      .then((p) => setPages(p.pages))
+      .catch((e) => setError(String(e)));
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope, sessionId]);
+
+  const onView = async (name: string) => {
+    if (expanded === name) {
+      setExpanded(null);
+      setContent("");
+      return;
+    }
+    try {
+      const body = await client.readMemoryPage(scope, name, sessionId ?? undefined);
+      setExpanded(name);
+      setContent(body.content);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const onDelete = async (name: string) => {
+    if (!window.confirm(`Delete memory page "${name}"?`)) return;
+    try {
+      await client.deleteMemoryPage(scope, name, sessionId ?? undefined);
+      if (expanded === name) {
+        setExpanded(null);
+        setContent("");
+      }
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <div className="sec">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 12,
+        }}
+      >
+        <h3 style={{ margin: 0, flex: 1 }}>Memory</h3>
+        <button
+          type="button"
+          onClick={refresh}
+          style={editorBtnStyle(false)}
+          title="Refresh page list"
+        >
+          ↻ refresh
+        </button>
+      </div>
+      <div className="desc">
+        LLM-maintained markdown wiki — see{" "}
+        <code style={{ margin: "0 4px" }}>docs/MEMORY.md</code>. Pages
+        live under the scope's <code>memory/pages/</code> directory.
+        ``user`` scope is cross-project; ``project`` scope is bound to
+        the active session's project.
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0" }}>
+        <Chips
+          value={scope}
+          onChange={(v) => setScope(v as "user" | "project")}
+          options={["user", "project"]}
+        />
+      </div>
+      {error && (
+        <div
+          style={{
+            fontSize: "var(--fs-xs)",
+            color: "var(--danger)",
+            marginBottom: 8,
+          }}
+        >
+          {error}
+        </div>
+      )}
+      {pages === null ? (
+        <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>
+          Loading…
+        </div>
+      ) : pages.length === 0 ? (
+        <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>
+          No pages yet — the agent files into <code>pages/</code> as it
+          ingests sources or you ask it to remember things.
+        </div>
+      ) : (
+        pages.map((p) => (
+          <div key={p.name} style={{ marginBottom: 6 }}>
+            <Field
+              label={
+                <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)" }}>
+                  {p.name}
+                </span>
+              }
+              sub={p.preview}
+            >
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <span
+                  style={{
+                    color: "var(--ink-4)",
+                    fontSize: "var(--fs-xs)",
+                    fontFamily: "var(--mono)",
+                  }}
+                >
+                  {p.size} B
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void onView(p.name)}
+                  style={editorBtnStyle(false)}
+                  title={expanded === p.name ? "Collapse" : "View content"}
+                >
+                  {expanded === p.name ? "hide" : "view"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDelete(p.name)}
+                  style={{
+                    width: 20,
+                    height: 20,
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 13,
+                    color: "var(--ink-3)",
+                    cursor: "pointer",
+                    background: "transparent",
+                    border: "none",
+                  }}
+                  title="Delete page"
+                >
+                  ×
+                </button>
+              </span>
+            </Field>
+            {expanded === p.name && (
+              <pre
+                style={{
+                  fontFamily: "var(--mono)",
+                  fontSize: 11,
+                  background: "var(--paper-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: 8,
+                  maxHeight: 320,
+                  overflow: "auto",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  color: "var(--ink-2)",
+                  margin: "4px 0 12px 0",
+                }}
+              >
+                {content}
+              </pre>
+            )}
+          </div>
+        ))
+      )}
     </div>
   );
 }
