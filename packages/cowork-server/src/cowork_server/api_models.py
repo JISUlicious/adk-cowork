@@ -173,6 +173,16 @@ class HealthResponse(BaseModel):
     skills: list[SkillInfo] = Field(default_factory=list)
     mcp: list[MCPServerStatusInfo] = Field(default_factory=list)
     compaction: CompactionInfo | None = None
+    # Slice T1 — UI uses this to render workspace-wide config blocks
+    # (model, compaction) read-only in multi-user mode without
+    # inspecting auth state. ``True`` iff ``cfg.auth.keys`` is
+    # non-empty.
+    is_multi_user: bool = False
+    # Slice T1 — ``True`` iff the runtime carries a ``cowork.toml``
+    # path (server started with ``COWORK_CONFIG_PATH`` set). The UI
+    # gates the PUT-config affordances on this; env-only mode renders
+    # the blocks read-only with a "no config file" notice.
+    has_config_file: bool = False
 
 
 # ── Tag: projects ──────────────────────────────────────────────────
@@ -451,6 +461,104 @@ class PatchLocalSessionRequest(BaseModel):
     title: str | None = None
 
 
+# ── Tag: config (Slice T1 — Settings UI editors) ───────────────────
+
+
+class ConfigModelPatch(BaseModel):
+    """Body for ``PUT /v1/config/model``. Any field left ``None``
+    is preserved as-is in the on-disk TOML; non-None fields
+    overwrite. ``api_key`` accepts either a literal secret or an
+    ``"env:VAR"`` reference (resolved at consumption time)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+
+
+class ConfigModelView(BaseModel):
+    """Returned by ``PUT /v1/config/model`` after a successful save —
+    echoes the new ``[model]`` section as it landed on disk."""
+
+    base_url: str
+    model: str
+    api_key: str
+
+
+class ConfigCompactionPatch(BaseModel):
+    """Body for ``PUT /v1/config/compaction``. ``None`` = leave
+    alone. Validation: ``compaction_interval >= 1``,
+    ``overlap_size >= 0``, ``token_threshold >= 1``,
+    ``event_retention_size >= 0``."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool | None = None
+    compaction_interval: int | None = Field(default=None, ge=1)
+    overlap_size: int | None = Field(default=None, ge=0)
+    token_threshold: int | None = Field(default=None, ge=1)
+    event_retention_size: int | None = Field(default=None, ge=0)
+
+
+class ConfigCompactionView(BaseModel):
+    """Returned by ``PUT /v1/config/compaction``."""
+
+    enabled: bool
+    compaction_interval: int
+    overlap_size: int
+    token_threshold: int
+    event_retention_size: int
+
+
+# ── Tag: profile (Slice T1) ────────────────────────────────────────
+
+
+class UserProfile(BaseModel):
+    """Per-user profile data persisted under ``settings/profile.json``
+    in the calling user's ``UserStore``. ``user_id`` is read-only —
+    sourced from the auth token, not the profile body."""
+
+    user_id: str
+    display_name: str = ""
+    email: str = ""
+
+
+class UserProfilePatch(BaseModel):
+    """Body for ``PUT /v1/profile``. ``None`` = leave alone."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    display_name: str | None = Field(default=None, max_length=80)
+    email: str | None = Field(default=None, max_length=200)
+
+
+# ── Tag: memory (Slice T1) ─────────────────────────────────────────
+
+
+class MemoryPageInfo(BaseModel):
+    """One row in ``GET /v1/memory/{scope}/pages``. ``preview`` is
+    the first 80 chars of the page content, newlines normalised to
+    spaces."""
+
+    name: str
+    size: int
+    preview: str
+
+
+class MemoryPageList(BaseModel):
+    scope: str
+    pages: list[MemoryPageInfo]
+
+
+class MemoryPageContent(BaseModel):
+    """Returned by ``GET /v1/memory/{scope}/pages/{name:path}``."""
+
+    scope: str
+    name: str
+    content: str
+
+
 __all__ = [
     # health + skills + mcp
     "CompactionInfo", "HealthResponse", "MCPServerStatusInfo", "SkillInfo",
@@ -472,6 +580,11 @@ __all__ = [
     "AutoRouteResponse", "SetAutoRouteRequest",
     "SkillsEnabledResponse", "SetSkillsEnabledRequest",
     "McpDisabledResponse", "SetMcpDisabledRequest",
+    # config + profile + memory (Slice T1)
+    "ConfigModelPatch", "ConfigModelView",
+    "ConfigCompactionPatch", "ConfigCompactionView",
+    "UserProfile", "UserProfilePatch",
+    "MemoryPageInfo", "MemoryPageList", "MemoryPageContent",
     # approvals
     "GrantApprovalRequest", "GrantApprovalResponse",
     # notifications

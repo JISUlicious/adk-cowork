@@ -169,8 +169,9 @@ def test_load_config_from_toml_enables_multi_user(tmp_path: Path) -> None:
     old = os.environ.get("COWORK_CONFIG_PATH")
     try:
         os.environ["COWORK_CONFIG_PATH"] = str(cfg_path)
-        cfg = _load_config()
+        cfg, path = _load_config()
         assert cfg.auth.keys == {"alice-key": "Alice", "bob-key": "Bob"}
+        assert path == cfg_path
     finally:
         if old is None:
             os.environ.pop("COWORK_CONFIG_PATH", None)

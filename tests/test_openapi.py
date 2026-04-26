@@ -43,12 +43,12 @@ def test_openapi_metadata_populated(tmp_path: Path) -> None:
     assert info["description"], "openapi description must be non-empty"
     # Version comes from importlib.metadata or the fallback.
     assert info["version"], "openapi version must be non-empty"
-    # All ten declared tag groups present.
+    # All declared tag groups present.
     tag_names = {t["name"] for t in schema.get("tags", [])}
     expected = {
         "health", "sessions", "policy", "approvals", "notifications",
         "search", "projects", "files", "local-dir", "streams", "skills",
-        "mcp",
+        "mcp", "config", "profile", "memory",
     }
     assert tag_names == expected, f"missing or extra tags: {tag_names ^ expected}"
 

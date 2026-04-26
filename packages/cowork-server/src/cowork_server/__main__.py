@@ -50,7 +50,7 @@ def _parent_death_watchdog(original_ppid: int) -> None:
             return
 
 
-def _load_config() -> CoworkConfig:
+def _load_config() -> tuple[CoworkConfig, Path | None]:
     """Load config from ``COWORK_CONFIG_PATH`` if set, else env-only.
 
     The TOML path unlocks fields that can't be expressed as env vars —
@@ -58,6 +58,10 @@ def _load_config() -> CoworkConfig:
     path is set but missing we fail loud: silently falling back to
     env-only hides multi-user configuration typos that otherwise look
     like a sidecar server.
+
+    Returns ``(cfg, config_path)`` so the runtime can stash the path
+    for Settings PUT routes that mutate the TOML in place.
+    ``config_path`` is ``None`` when env-only.
     """
     path = os.environ.get("COWORK_CONFIG_PATH")
     if path:
@@ -74,12 +78,12 @@ def _load_config() -> CoworkConfig:
             f"{'multi-user (' + str(len(keys)) + ' keys)' if keys else 'single-token'}",
             flush=True,
         )
-        return cfg
-    return CoworkConfig.from_env()
+        return cfg, p
+    return CoworkConfig.from_env(), None
 
 
 def main() -> None:
-    cfg = _load_config()
+    cfg, config_path = _load_config()
     token = os.environ.get("COWORK_TOKEN") or cfg.auth.token or generate_token()
     host = cfg.server.host
     port = int(os.environ.get("COWORK_PORT", 0)) or cfg.server.port or _pick_port(host)
@@ -91,7 +95,7 @@ def main() -> None:
         )
         t.start()
 
-    app = create_app(cfg, token=token)
+    app = create_app(cfg, token=token, config_path=config_path)
     print(f"COWORK_READY host={host} port={port} token={token}", flush=True)
     uvicorn.run(app, host=host, port=port, log_level="warning")
 

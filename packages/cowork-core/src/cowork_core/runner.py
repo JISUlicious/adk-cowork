@@ -183,6 +183,11 @@ class CoworkRuntime:
     # Slice S2 — produces the per-turn prompt snippet for the memory
     # subsystem. Stateless; one instance per runtime is fine.
     memory: MemoryRegistry = field(default_factory=MemoryRegistry)
+    # Slice T1 — path to the ``cowork.toml`` this runtime was built
+    # from. ``None`` when the server was started in env-only mode
+    # (``COWORK_CONFIG_PATH`` unset). Settings PUT routes that mutate
+    # workspace-wide config check this and 503 cleanly when None.
+    config_path: Path | None = None
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -1352,7 +1357,10 @@ def _effective_mcp_servers(
     return out
 
 
-def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
+def build_runtime(
+    cfg: CoworkConfig,
+    config_path: "Path | None" = None,
+) -> CoworkRuntime:
     if cfg.runtime.backend != "local":
         raise NotImplementedError(
             f"runtime backend {cfg.runtime.backend!r} is not implemented yet; "
@@ -1486,6 +1494,7 @@ def build_runtime(cfg: CoworkConfig) -> CoworkRuntime:
         user_store=user_store,
         project_store=project_store,
         memory=memory,
+        config_path=config_path,
     )
 
 

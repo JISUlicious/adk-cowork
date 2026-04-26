@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Any
 
@@ -76,7 +77,13 @@ from cowork_server.api_models import (
     SendMessageRequest,
     SessionInfo,
     SessionListItem,
+    ConfigCompactionPatch,
+    ConfigCompactionView,
+    ConfigModelPatch,
+    ConfigModelView,
     McpDisabledResponse,
+    MemoryPageContent,
+    MemoryPageList,
     SetAutoRouteRequest,
     SetMcpDisabledRequest,
     SetPolicyModeRequest,
@@ -84,6 +91,8 @@ from cowork_server.api_models import (
     SetSkillsEnabledRequest,
     SetToolAllowlistRequest,
     SkillsEnabledResponse,
+    UserProfile,
+    UserProfilePatch,
     ToolAllowlistResponse,
     UploadFileResult,
 )
@@ -115,6 +124,9 @@ _OPENAPI_TAGS: list[dict[str, str]] = [
     {"name": "streams", "description": "SSE / WebSocket event streams."},
     {"name": "skills", "description": "User-installable skill bundles (zip install / uninstall)."},
     {"name": "mcp", "description": "Model Context Protocol server management (add / remove / restart)."},
+    {"name": "config", "description": "Workspace-wide config edits — model + compaction (single-user only)."},
+    {"name": "profile", "description": "Per-user profile (display name + email)."},
+    {"name": "memory", "description": "Per-scope memory page management (list / read / delete)."},
 ]
 
 
@@ -133,11 +145,15 @@ _api_key_scheme = APIKeyHeader(
 )
 
 
-def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> FastAPI:
+def create_app(
+    cfg: CoworkConfig | None = None,
+    token: str | None = None,
+    config_path: Path | None = None,
+) -> FastAPI:
     cfg = cfg or CoworkConfig()
     token = token or cfg.auth.token or generate_token()
     guard = create_guard(token, cfg.auth.keys or None)
-    runtime: CoworkRuntime = build_runtime(cfg)
+    runtime: CoworkRuntime = build_runtime(cfg, config_path=config_path)
 
     cache_dir = runtime.workspace.root / "global" / ".preview-cache"
     preview_cache = PreviewCache(cache_dir)
@@ -237,6 +253,14 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
                 "token_threshold": cfg.compaction.token_threshold,
                 "event_retention_size": cfg.compaction.event_retention_size,
             },
+            # Slice T1 — surface state the Settings UI uses to decide
+            # whether to render workspace-wide config blocks editable
+            # or read-only. ``is_multi_user`` is the auth-level gate;
+            # ``has_config_file`` distinguishes "TOML on disk" mode
+            # from "env-only" mode (server started without
+            # ``COWORK_CONFIG_PATH``).
+            "is_multi_user": bool(runtime.multi_user),
+            "has_config_file": runtime.config_path is not None,
         }
 
     # ── Policy (per-session, falls back to server default) ─────────────
@@ -861,6 +885,336 @@ def create_app(cfg: CoworkConfig | None = None, token: str | None = None) -> Fas
         return {
             "servers": [_status_payload(s) for s in runtime.mcp_status.values()],
         }
+
+    # ── Workspace-wide config edits (Slice T1) ─────────────────────────
+
+    def _require_writable_config() -> Path:
+        """Return ``runtime.config_path`` or raise the right HTTP error.
+        503 in env-only mode (no TOML to write); 403 in multi-user mode
+        (workspace-wide config is operator-managed out of band)."""
+        if runtime.multi_user:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "workspace-wide config is read-only in multi-user "
+                    "mode; the operator edits cowork.toml and restarts "
+                    "the server"
+                ),
+            )
+        if runtime.config_path is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "no cowork.toml in use (server started in env-only "
+                    "mode); set COWORK_CONFIG_PATH and restart to enable "
+                    "in-app config edits"
+                ),
+            )
+        return runtime.config_path
+
+    @app.put(
+        "/v1/config/model",
+        tags=["config"],
+        summary="Update [model] in cowork.toml",
+        response_model=ConfigModelView,
+    )
+    async def update_config_model(
+        body: ConfigModelPatch,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Mutate the ``[model]`` section of ``cowork.toml`` in place.
+
+        Single-user only. ``api_key`` accepts a literal secret or an
+        ``"env:VAR"`` reference; the writer doesn't resolve env vars
+        — it stores the string verbatim. **Comment + custom whitespace
+        are NOT preserved** by the underlying ``tomli_w`` writer; users
+        who want comments keep them in a separate ``cowork.toml.example``.
+
+        Takes effect on next server restart. The UI surfaces a
+        "restart required" banner after a successful save.
+        """
+        from cowork_core.config_writer import ConfigWriteError, update_toml_section
+
+        config_path = _require_writable_config()
+        patch = body.model_dump(exclude_none=True)
+        try:
+            data = update_toml_section(config_path, "model", patch)
+        except ConfigWriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        model_section = data.get("model") or {}
+        return {
+            "base_url": model_section.get("base_url", cfg.model.base_url),
+            "model": model_section.get("model", cfg.model.model),
+            "api_key": model_section.get("api_key", cfg.model.api_key),
+        }
+
+    @app.put(
+        "/v1/config/compaction",
+        tags=["config"],
+        summary="Update [compaction] in cowork.toml",
+        response_model=ConfigCompactionView,
+    )
+    async def update_config_compaction(
+        body: ConfigCompactionPatch,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Mutate the ``[compaction]`` section of ``cowork.toml`` in
+        place. Single-user only. Pydantic validates the field ranges
+        (``compaction_interval >= 1``, ``overlap_size >= 0``,
+        ``token_threshold >= 1``, ``event_retention_size >= 0``).
+        Takes effect on next server restart."""
+        from cowork_core.config_writer import ConfigWriteError, update_toml_section
+
+        config_path = _require_writable_config()
+        patch = body.model_dump(exclude_none=True)
+        try:
+            data = update_toml_section(config_path, "compaction", patch)
+        except ConfigWriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        c = data.get("compaction") or {}
+        return {
+            "enabled": c.get("enabled", cfg.compaction.enabled),
+            "compaction_interval": c.get(
+                "compaction_interval", cfg.compaction.compaction_interval,
+            ),
+            "overlap_size": c.get("overlap_size", cfg.compaction.overlap_size),
+            "token_threshold": c.get(
+                "token_threshold", cfg.compaction.token_threshold,
+            ),
+            "event_retention_size": c.get(
+                "event_retention_size", cfg.compaction.event_retention_size,
+            ),
+        }
+
+    # ── Per-user profile (Slice T1) ────────────────────────────────────
+
+    _PROFILE_KEY = "settings/profile.json"
+
+    @app.get(
+        "/v1/profile",
+        tags=["profile"],
+        summary="Get the calling user's profile",
+        response_model=UserProfile,
+    )
+    async def get_profile(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Read the calling user's profile from the ``UserStore``.
+        ``display_name`` and ``email`` default to empty strings when
+        unset. ``user_id`` is sourced from the auth token, never the
+        body — clients can't change it via this route."""
+        import json
+
+        raw = runtime.user_store.read(user.user_id, _PROFILE_KEY)
+        data: dict[str, Any] = {}
+        if raw is not None:
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+                if isinstance(parsed, dict):
+                    data = parsed
+            except (ValueError, UnicodeDecodeError):
+                data = {}
+        return {
+            "user_id": user.user_id,
+            "display_name": str(data.get("display_name", "")),
+            "email": str(data.get("email", "")),
+        }
+
+    @app.put(
+        "/v1/profile",
+        tags=["profile"],
+        summary="Update the calling user's profile",
+        response_model=UserProfile,
+    )
+    async def put_profile(
+        body: UserProfilePatch,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Update the calling user's profile. Only the fields named in
+        the body are touched; ``None`` keeps the existing value.
+        Per-user — alice's PUT can't affect bob's profile."""
+        import json
+
+        raw = runtime.user_store.read(user.user_id, _PROFILE_KEY)
+        current: dict[str, Any] = {}
+        if raw is not None:
+            try:
+                parsed = json.loads(raw.decode("utf-8"))
+                if isinstance(parsed, dict):
+                    current = parsed
+            except (ValueError, UnicodeDecodeError):
+                current = {}
+
+        if body.display_name is not None:
+            current["display_name"] = body.display_name
+        if body.email is not None:
+            if body.email and "@" not in body.email:
+                raise HTTPException(
+                    status_code=422,
+                    detail="email must contain '@'",
+                )
+            current["email"] = body.email
+
+        runtime.user_store.write(
+            user.user_id, _PROFILE_KEY,
+            json.dumps(current).encode("utf-8"),
+        )
+        return {
+            "user_id": user.user_id,
+            "display_name": str(current.get("display_name", "")),
+            "email": str(current.get("email", "")),
+        }
+
+    # ── Memory page management (Slice T1) ──────────────────────────────
+
+    _MEMORY_PAGES_PREFIX = "memory/pages/"
+
+    def _validate_memory_scope(scope: str) -> str:
+        if scope not in {"user", "project"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"scope must be 'user' or 'project', got {scope!r}",
+            )
+        return scope
+
+    async def _resolve_project_id(session_id: str | None, user_id: str) -> str:
+        """For project-scope memory routes — get the project's
+        ``str(project.root)`` from the session's CoworkToolContext.
+        Returns 400 when ``session_id`` is missing, 404 when the
+        session doesn't exist."""
+        from cowork_core.tools.base import COWORK_CONTEXT_KEY
+
+        if not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "session_id query parameter is required for "
+                    "scope='project' memory routes"
+                ),
+            )
+        sess = await runtime.runner.session_service.get_session(
+            app_name="cowork", user_id=user_id, session_id=session_id,
+        )
+        if sess is None:
+            raise HTTPException(
+                status_code=404, detail=f"session {session_id} not found",
+            )
+        ctx = sess.state.get(COWORK_CONTEXT_KEY)
+        if ctx is None or not hasattr(ctx, "project"):
+            raise HTTPException(
+                status_code=404,
+                detail=f"session {session_id} has no project context",
+            )
+        return str(ctx.project.root)
+
+    def _list_pages_user(user_id: str) -> list[dict[str, Any]]:
+        keys = runtime.user_store.list(user_id, _MEMORY_PAGES_PREFIX)
+        return [
+            _page_info(name, runtime.user_store.read(user_id, name))
+            for name in keys if name.endswith(".md")
+        ]
+
+    def _list_pages_project(user_id: str, project_id: str) -> list[dict[str, Any]]:
+        keys = runtime.project_store.list(
+            user_id, project_id, _MEMORY_PAGES_PREFIX,
+        )
+        return [
+            _page_info(
+                name, runtime.project_store.read(user_id, project_id, name),
+            )
+            for name in keys if name.endswith(".md")
+        ]
+
+    def _page_info(key: str, body: bytes | None) -> dict[str, Any]:
+        # Strip the "memory/pages/" prefix for the public name; the
+        # full key is an implementation detail of the storage layer.
+        public_name = key[len(_MEMORY_PAGES_PREFIX):] if key.startswith(_MEMORY_PAGES_PREFIX) else key
+        if body is None:
+            return {"name": public_name, "size": 0, "preview": ""}
+        text = body.decode("utf-8", errors="replace")
+        preview = text[:80].replace("\n", " ").replace("\r", " ")
+        return {"name": public_name, "size": len(body), "preview": preview}
+
+    @app.get(
+        "/v1/memory/{scope}/pages",
+        tags=["memory"],
+        summary="List memory pages for the given scope",
+        response_model=MemoryPageList,
+    )
+    async def list_memory_pages(
+        scope: str,
+        session_id: str | None = None,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """List pages under ``memory/pages/`` for the given scope.
+        ``user`` scope reads from the calling user's ``UserStore``;
+        ``project`` scope requires ``?session_id=`` to identify which
+        project's store to query."""
+        scope = _validate_memory_scope(scope)
+        if scope == "user":
+            pages = _list_pages_user(user.user_id)
+        else:
+            project_id = await _resolve_project_id(session_id, user.user_id)
+            pages = _list_pages_project(user.user_id, project_id)
+        return {"scope": scope, "pages": pages}
+
+    @app.get(
+        "/v1/memory/{scope}/pages/{name:path}",
+        tags=["memory"],
+        summary="Read a memory page",
+        response_model=MemoryPageContent,
+    )
+    async def read_memory_page(
+        scope: str,
+        name: str,
+        session_id: str | None = None,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Return the full content of ``pages/<name>`` (e.g.
+        ``pages/scratch.md``). ``name`` is the relative-to-pages name
+        — the route prepends ``memory/pages/`` before lookup. 404 on
+        missing."""
+        scope = _validate_memory_scope(scope)
+        if not name or ".." in name.split("/") or name.startswith("/"):
+            raise HTTPException(status_code=400, detail=f"invalid page name: {name!r}")
+        key = f"{_MEMORY_PAGES_PREFIX}{name}"
+        if scope == "user":
+            body = runtime.user_store.read(user.user_id, key)
+        else:
+            project_id = await _resolve_project_id(session_id, user.user_id)
+            body = runtime.project_store.read(user.user_id, project_id, key)
+        if body is None:
+            raise HTTPException(status_code=404, detail=f"page not found: {name}")
+        return {
+            "scope": scope,
+            "name": name,
+            "content": body.decode("utf-8", errors="replace"),
+        }
+
+    @app.delete(
+        "/v1/memory/{scope}/pages/{name:path}",
+        tags=["memory"],
+        summary="Delete a memory page",
+        response_model=DeleteResponse,
+    )
+    async def delete_memory_page(
+        scope: str,
+        name: str,
+        session_id: str | None = None,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, str]:
+        """Idempotent — deleting a missing page returns 200, not 404
+        (matches the existing skill / MCP delete semantics)."""
+        scope = _validate_memory_scope(scope)
+        if not name or ".." in name.split("/") or name.startswith("/"):
+            raise HTTPException(status_code=400, detail=f"invalid page name: {name!r}")
+        key = f"{_MEMORY_PAGES_PREFIX}{name}"
+        if scope == "user":
+            runtime.user_store.delete(user.user_id, key)
+        else:
+            project_id = await _resolve_project_id(session_id, user.user_id)
+            runtime.project_store.delete(user.user_id, project_id, key)
+        return {"status": "deleted"}
 
     # ── Global search (⌘K palette — F.P6b) ────────────────────────────
 

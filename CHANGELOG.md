@@ -276,6 +276,71 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Settings UI — Slice T1 (backend + atomic TOML writer) (2026-04-26)
+
+Backend foundation for in-app settings editing. Seven new routes
+under three new OpenAPI tags (`config`, `profile`, `memory`) plus
+two new `HealthResponse` fields (`is_multi_user`, `has_config_file`)
+the UI uses to render workspace-wide config blocks read-only when
+appropriate. Workspace-wide config (model + compaction) edits write
+directly to `cowork.toml` via a new atomic writer; comments are NOT
+preserved (`tomli_w` is a writer not a round-tripper). Per-user
+profile + memory pages route through the S1 `UserStore` /
+`ProjectStore` so MU mode just works without further code.
+
+- add `cowork-core` dep on `tomli-w >=1.0`
+- add `packages/cowork-core/src/cowork_core/config_writer.py` —
+  `update_toml_section(path, section, patch)` reads full TOML,
+  merges patch (None = leave alone), atomic temp+rename write.
+  Same pid/tid/nonce-suffixed temp pattern as the S1 storage layer.
+- update `cowork_core/runner.py` — `build_runtime` accepts
+  `config_path: Path | None`; `CoworkRuntime` carries it so PUT
+  routes know where to write
+- update `cowork-server/__main__.py` — `_load_config` returns
+  `(cfg, path)` tuple; passes path through to `create_app`
+- update `cowork_server/app.py` — `create_app` takes optional
+  `config_path`; threads to `build_runtime`. Three new tag groups
+  registered in `_OPENAPI_TAGS`. Health route surfaces
+  `is_multi_user` + `has_config_file`.
+- new routes (7):
+  - `PUT /v1/config/model` — atomic `cowork.toml` `[model]` edit;
+    503 in env-only mode, 403 in MU
+  - `PUT /v1/config/compaction` — same shape; Pydantic validates
+    field ranges (`compaction_interval >= 1` etc.)
+  - `GET /v1/profile` — reads `settings/profile.json` from calling
+    user's `UserStore`; defaults to empty strings when unset
+  - `PUT /v1/profile` — per-user write; rejects `email` without `@`
+  - `GET /v1/memory/{scope}/pages` — lists pages with name + size +
+    80-char preview; `?session_id=` required for `scope=project`
+  - `GET /v1/memory/{scope}/pages/{name:path}` — read full content
+  - `DELETE /v1/memory/{scope}/pages/{name:path}` — idempotent
+- update `cowork_server/api_models.py` — new models:
+  `ConfigModelPatch` / `ConfigModelView`,
+  `ConfigCompactionPatch` / `ConfigCompactionView`,
+  `UserProfile` / `UserProfilePatch`,
+  `MemoryPageInfo` / `MemoryPageList` / `MemoryPageContent`.
+  `HealthResponse` gains `is_multi_user` + `has_config_file`.
+- update `tests/test_openapi.py` — expected tag set includes new
+  `config` / `profile` / `memory` groups
+- update `tests/test_multi_user.py` — `_load_config` now returns a
+  tuple; existing test follows the new shape
+- add `tests/test_settings.py` — 19 new tests: TOML writer round-
+  trip + missing-file + invalid-toml + None-key-drop + creates-
+  missing-section, model PUT happy path + MU 403 + env-only 503,
+  compaction PUT + range validation, profile GET defaults + PUT
+  round-trip + email-no-@ rejection + per-user MU isolation,
+  memory list/read/delete + project-scope-requires-session +
+  invalid-scope-400 + missing-page-404, health is_multi_user +
+  has_config_file in SU + MU. Autouse `_isolate_home` fixture
+  redirects `$HOME` so FS user-store writes don't pollute the
+  developer's real `~/.config/cowork/`.
+- update `README.md` — feature row for T1
+- 305 total tests green (was 286, +19)
+
+Tier F (deferred): operator self-service in MU (would lift the 403),
+per-user model overrides via `UserStore`, live runtime reload, schema
+editing in the Memory tab, `cowork.toml` backup-on-write.
+
 ### Memory subsystem — Slice S2 (LLM Wiki on top of stores) (2026-04-25)
 
 First consumer of the S1 storage abstraction. Karpathy's "LLM Wiki"
