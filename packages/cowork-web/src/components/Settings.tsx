@@ -328,6 +328,35 @@ function editorBtnStyle(disabled: boolean): React.CSSProperties {
   };
 }
 
+/** Slice U1 — small mono badge next to each editable field
+ *  indicating where its current value comes from
+ *  (``"db"`` = DB-overridden via the workspace_settings table,
+ *  ``"toml"`` = cowork.toml default, anything else hides the badge).
+ */
+function SourceBadge({ value }: { value: string | undefined }) {
+  if (value !== "db" && value !== "toml") return null;
+  return (
+    <span
+      style={{
+        marginLeft: 6,
+        fontSize: 10,
+        fontFamily: "var(--mono)",
+        color: "var(--ink-3)",
+        border: "1px solid var(--line)",
+        borderRadius: 3,
+        padding: "1px 4px",
+      }}
+      title={
+        value === "db"
+          ? "Override stored in multiuser.db (operator-edited via UI)"
+          : "Default from cowork.toml"
+      }
+    >
+      ({value})
+    </span>
+  );
+}
+
 function SecWorkspace() {
   return (
     <div className="sec">
@@ -1599,6 +1628,13 @@ function SecSystem({ client }: { client: CoworkClient }) {
   const [error, setError] = useState<string | null>(null);
   // Slice T2 — sticky banner on saving. Cleared by Dismiss.
   const [restartBanner, setRestartBanner] = useState(false);
+  // Slice U1 — per-key source map (db | toml) from
+  // /v1/config/effective. Drives the (db) / (toml) badges next to
+  // each editable field so operators see which values came from DB
+  // overrides vs cowork.toml defaults.
+  const [effectiveSource, setEffectiveSource] = useState<
+    Record<string, string>
+  >({});
 
   const refreshHealth = () => {
     client
@@ -1607,18 +1643,37 @@ function SecSystem({ client }: { client: CoworkClient }) {
       .catch((e) => setError(String(e)));
   };
 
+  const refreshEffective = () => {
+    client
+      .getEffectiveConfig()
+      .then((eff) => setEffectiveSource(eff.source ?? {}))
+      .catch(() => setEffectiveSource({}));
+  };
+
   useEffect(() => {
     refreshHealth();
+    refreshEffective();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
+  // Slice U1 — gate flips to !is_operator. SU mode reports
+  // is_operator=true unconditionally (the local user is the
+  // operator). MU mode reports per-caller. The notice text branches
+  // on operator_configured to distinguish "no operator set" from
+  // "operator is someone else".
   const isMu = health?.is_multi_user === true;
   const hasConfigFile = health?.has_config_file === true;
-  const editsBlocked = isMu || !hasConfigFile;
-  const editsBlockedReason = isMu
-    ? "configured by operator — edit cowork.toml on the server and restart"
-    : !hasConfigFile
+  const isOperator = health?.is_operator === true;
+  const operatorConfigured = health?.operator_configured === true;
+  // env-only SU mode still blocks (no cowork.toml to write); R5
+  // covers the rest via the operator gate.
+  const editsBlocked = !isOperator || !hasConfigFile;
+  const editsBlockedReason = !hasConfigFile && !isMu
     ? "server is in env-only mode (no cowork.toml on disk) — set COWORK_CONFIG_PATH and restart"
+    : !isOperator && isMu
+    ? operatorConfigured
+      ? "operator-only — only the configured operator can edit shared settings"
+      : "no operator configured — set [auth].operator in cowork.toml to a user label and restart"
     : "";
 
   return (
@@ -1671,9 +1726,11 @@ function SecSystem({ client }: { client: CoworkClient }) {
         health={health}
         editsBlocked={editsBlocked}
         editsBlockedReason={editsBlockedReason}
+        sourceMap={effectiveSource}
         onSaved={() => {
           setRestartBanner(true);
           refreshHealth();
+          refreshEffective();
         }}
       />
       <SecConfigCompaction
@@ -1681,9 +1738,11 @@ function SecSystem({ client }: { client: CoworkClient }) {
         health={health}
         editsBlocked={editsBlocked}
         editsBlockedReason={editsBlockedReason}
+        sourceMap={effectiveSource}
         onSaved={() => {
           setRestartBanner(true);
           refreshHealth();
+          refreshEffective();
         }}
       />
       <Field label="Status">
@@ -1754,12 +1813,14 @@ function SecConfigModel({
   health,
   editsBlocked,
   editsBlockedReason,
+  sourceMap,
   onSaved,
 }: {
   client: CoworkClient;
   health: HealthInfo | null;
   editsBlocked: boolean;
   editsBlockedReason: string;
+  sourceMap: Record<string, string>;
   onSaved: () => void;
 }) {
   const [baseUrl, setBaseUrl] = useState("");
@@ -1851,7 +1912,14 @@ function SecConfigModel({
           {editsBlockedReason}
         </div>
       )}
-      <Field label="base_url">
+      <Field
+        label={
+          <span>
+            base_url
+            <SourceBadge value={sourceMap["model.base_url"]} />
+          </span>
+        }
+      >
         <input
           type="text"
           value={baseUrl}
@@ -1861,7 +1929,14 @@ function SecConfigModel({
           style={editorInputStyle}
         />
       </Field>
-      <Field label="model">
+      <Field
+        label={
+          <span>
+            model
+            <SourceBadge value={sourceMap["model.model"]} />
+          </span>
+        }
+      >
         <input
           type="text"
           value={model}
@@ -1875,6 +1950,7 @@ function SecConfigModel({
         label={
           <span>
             api_key
+            <SourceBadge value={sourceMap["model.api_key"]} />
             {apiKeyIsEnvRef && (
               <span
                 style={{
@@ -1953,12 +2029,14 @@ function SecConfigCompaction({
   health,
   editsBlocked,
   editsBlockedReason,
+  sourceMap,
   onSaved,
 }: {
   client: CoworkClient;
   health: HealthInfo | null;
   editsBlocked: boolean;
   editsBlockedReason: string;
+  sourceMap: Record<string, string>;
   onSaved: () => void;
 }) {
   const c = health?.compaction;
@@ -2067,7 +2145,14 @@ function SecConfigCompaction({
           {editsBlockedReason}
         </div>
       )}
-      <Field label="enabled">
+      <Field
+        label={
+          <span>
+            enabled
+            <SourceBadge value={sourceMap["compaction.enabled"]} />
+          </span>
+        }
+      >
         <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
           <input
             type="checkbox"
@@ -2080,7 +2165,15 @@ function SecConfigCompaction({
           </span>
         </label>
       </Field>
-      <Field label="compaction_interval" sub="Min 1.">
+      <Field
+        label={
+          <span>
+            compaction_interval
+            <SourceBadge value={sourceMap["compaction.compaction_interval"]} />
+          </span>
+        }
+        sub="Min 1."
+      >
         <input
           type="number"
           value={interval}
@@ -2090,7 +2183,15 @@ function SecConfigCompaction({
           style={editorInputStyle}
         />
       </Field>
-      <Field label="overlap_size" sub="Min 0.">
+      <Field
+        label={
+          <span>
+            overlap_size
+            <SourceBadge value={sourceMap["compaction.overlap_size"]} />
+          </span>
+        }
+        sub="Min 0."
+      >
         <input
           type="number"
           value={overlap}
@@ -2100,7 +2201,15 @@ function SecConfigCompaction({
           style={editorInputStyle}
         />
       </Field>
-      <Field label="token_threshold" sub="Min 1.">
+      <Field
+        label={
+          <span>
+            token_threshold
+            <SourceBadge value={sourceMap["compaction.token_threshold"]} />
+          </span>
+        }
+        sub="Min 1."
+      >
         <input
           type="number"
           value={tokenThreshold}
@@ -2110,7 +2219,15 @@ function SecConfigCompaction({
           style={editorInputStyle}
         />
       </Field>
-      <Field label="event_retention_size" sub="Min 0.">
+      <Field
+        label={
+          <span>
+            event_retention_size
+            <SourceBadge value={sourceMap["compaction.event_retention_size"]} />
+          </span>
+        }
+        sub="Min 0."
+      >
         <input
           type="number"
           value={retention}

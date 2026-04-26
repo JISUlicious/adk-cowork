@@ -23,6 +23,11 @@ from cowork_core.storage.sqlite import (
     SqliteUserStore,
     _open_sqlite,
 )
+from cowork_core.storage.workspace_settings import (
+    FSWorkspaceSettingsStore,
+    SqliteWorkspaceSettingsStore,
+    WorkspaceSettingsStore,
+)
 
 if TYPE_CHECKING:
     from cowork_core.config import CoworkConfig
@@ -89,3 +94,32 @@ def build_stores(
             f"available: {sorted(_BACKENDS)}",
         )
     return _BACKENDS[backend](cfg, workspace)
+
+
+def build_workspace_settings_store(
+    cfg: "CoworkConfig",
+    workspace: "Workspace",
+    config_path: Path | None,
+) -> WorkspaceSettingsStore | None:
+    """Slice U1 — build the workspace-wide settings store.
+
+    Returns ``None`` when there's no editable surface — i.e. SU mode
+    started in env-only (no ``COWORK_CONFIG_PATH`` set). PUT routes
+    return 503 when the store is None.
+
+    R1 mitigation — the SQLite backing opens **its own** connection
+    rather than threading the one ``_build_sqlite_stores`` returned.
+    SQLite WAL mode handles concurrent connections fine; the
+    per-instance lock keeps writes serialised within the new
+    connection. Avoids refactoring the existing factory contract.
+    """
+    if cfg.auth.keys:
+        # Multi-user — SQLite-backed, regardless of whether a
+        # cowork.toml is present. (TOML edits would be ignored in
+        # MU anyway; the DB is the canonical override surface.)
+        dsn = cfg.storage.dsn or str(workspace.root / "multiuser.db")
+        conn = _open_sqlite(dsn if dsn == ":memory:" else Path(dsn))
+        return SqliteWorkspaceSettingsStore(conn)
+    if config_path is not None:
+        return FSWorkspaceSettingsStore(config_path)
+    return None  # env-only SU mode → no editable surface

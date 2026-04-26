@@ -42,7 +42,9 @@ from cowork_core.storage import (
     InMemoryUserStore,
     ProjectStore,
     UserStore,
+    WorkspaceSettingsStore,
     build_stores,
+    build_workspace_settings_store,
 )
 from cowork_core.tools import (
     COWORK_AUTO_ROUTE_KEY,
@@ -188,6 +190,12 @@ class CoworkRuntime:
     # (``COWORK_CONFIG_PATH`` unset). Settings PUT routes that mutate
     # workspace-wide config check this and 503 cleanly when None.
     config_path: Path | None = None
+    # Slice U1 — workspace-wide settings store (FS-backed in SU,
+    # SQLite-backed in MU). ``None`` in env-only SU mode (no editable
+    # surface). PUT routes for model + compaction route through this
+    # store; in MU it sits at ``<workspace>/multiuser.db`` keyed by
+    # dotted setting names (``model.base_url``, etc.).
+    workspace_settings_store: WorkspaceSettingsStore | None = None
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -1369,6 +1377,23 @@ def build_runtime(
             f"phase against the same protocols."
         )
     workspace = Workspace(root=cfg.workspace.root)
+
+    # Slice U1 — boot-time workspace-settings merge.
+    # Build the workspace settings store FIRST (it needs only workspace +
+    # config_path), pull any DB/TOML overrides, and merge them into cfg
+    # before the agent + model + compaction config are materialised.
+    # ``_merge_overrides`` is module-private (R2): no re-export from
+    # ``__init__.py``, friction prevents accidental per-turn use.
+    # ``_warn_mode_mismatch`` (R4) emits a startup notice if SU mode
+    # boots over a populated MU ``workspace_settings`` table.
+    workspace_settings_store = build_workspace_settings_store(
+        cfg, workspace, config_path,
+    )
+    if workspace_settings_store is not None:
+        overrides = workspace_settings_store.get_overrides()
+        cfg = _merge_overrides(cfg, overrides)
+    _warn_mode_mismatch(cfg, workspace)
+
     projects = ProjectRegistry(workspace=workspace)
     skills = SkillRegistry()
     # Three scan scopes, in precedence order (later scans override on
@@ -1495,7 +1520,86 @@ def build_runtime(
         project_store=project_store,
         memory=memory,
         config_path=config_path,
+        workspace_settings_store=workspace_settings_store,
     )
+
+
+# Slice U1 — module-private helpers. ``_merge_overrides`` is NOT
+# re-exported by any ``__init__.py`` so future contributors can't
+# import it from elsewhere — friction prevents per-turn footguns.
+# Boot-only is the contract.
+
+
+def _merge_overrides(
+    cfg: CoworkConfig, overrides: dict[str, dict[str, object]],
+) -> CoworkConfig:
+    """Merge workspace-settings overrides into cfg.
+
+    ``overrides`` is the ``{section: {key: value}}`` map returned by
+    ``WorkspaceSettingsStore.get_overrides()``. Only ``model`` and
+    ``compaction`` sections are recognised today; other sections are
+    silently ignored (forward compat with future schema additions).
+
+    Returns a new ``CoworkConfig`` — the input is untouched. Pydantic
+    v2's ``model_copy(update={...})`` is used so validation runs on
+    the merged result; an out-of-range override (e.g. negative
+    ``compaction_interval``) raises here, fail-loud at boot.
+    """
+    updates: dict[str, object] = {}
+    if "model" in overrides and isinstance(overrides["model"], dict):
+        model_patch = {
+            k: v for k, v in overrides["model"].items() if v is not None
+        }
+        if model_patch:
+            updates["model"] = cfg.model.model_copy(update=model_patch)
+    if "compaction" in overrides and isinstance(overrides["compaction"], dict):
+        comp_patch = {
+            k: v for k, v in overrides["compaction"].items() if v is not None
+        }
+        if comp_patch:
+            updates["compaction"] = cfg.compaction.model_copy(
+                update=comp_patch,
+            )
+    if not updates:
+        return cfg
+    return cfg.model_copy(update=updates)
+
+
+def _warn_mode_mismatch(cfg: CoworkConfig, workspace: Workspace) -> None:
+    """R4 — log a startup warning when SU mode boots over a populated
+    ``workspace_settings`` table from a prior MU deployment. Operator
+    notices instead of being silently surprised that their TOML
+    edits aren't reflected in agent behaviour."""
+    if cfg.auth.keys:
+        return  # MU mode: nothing to warn about
+    db_path = workspace.root / "multiuser.db"
+    if not db_path.is_file():
+        return
+    import sqlite3 as _sqlite3
+
+    try:
+        conn = _sqlite3.connect(str(db_path))
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM workspace_settings",
+            ).fetchone()
+            count = row[0] if row else 0
+        finally:
+            conn.close()
+    except _sqlite3.OperationalError:
+        # Table doesn't exist yet — nothing to warn about.
+        return
+    except Exception:
+        # Any other DB read failure: best-effort warning, don't block boot.
+        return
+    if count > 0:
+        print(
+            f"[storage] SU mode but workspace_settings table has "
+            f"{count} rows from prior MU deployment — those overrides "
+            f"are inactive in SU. Edit cowork.toml directly or switch "
+            f"back to MU mode to use them.",
+            flush=True,
+        )
 
 
 def build_runner(cfg: CoworkConfig) -> Runner:

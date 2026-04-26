@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from cowork_core.storage.factory import (
     build_stores,
+    build_workspace_settings_store,
     register_backend,
 )
 from cowork_core.storage.fs import FSProjectStore, FSUserStore
@@ -41,16 +42,25 @@ from cowork_core.storage.sqlite import (
     SqliteProjectStore,
     SqliteUserStore,
 )
+from cowork_core.storage.workspace_settings import (
+    FSWorkspaceSettingsStore,
+    SqliteWorkspaceSettingsStore,
+    WorkspaceSettingsStore,
+)
 
 __all__ = [
     "FSProjectStore",
     "FSUserStore",
+    "FSWorkspaceSettingsStore",
     "InMemoryProjectStore",
     "InMemoryUserStore",
     "ProjectStore",
     "SqliteProjectStore",
     "SqliteUserStore",
+    "SqliteWorkspaceSettingsStore",
     "UserStore",
+    "WorkspaceSettingsStore",
     "build_stores",
+    "build_workspace_settings_store",
     "register_backend",
 ]

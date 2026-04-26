@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 load_dotenv()
 
@@ -127,10 +127,38 @@ class AuthConfig(BaseModel):
     - ``token``: explicit token for sidecar mode (generated if empty).
     - ``keys``: dict of ``api_key → user_label`` for multi-user mode.
       When non-empty, each key identifies a distinct user.
+    - ``operator``: U1 — name of the user_label allowed to edit
+      workspace-wide settings (model + compaction) via the API in
+      multi-user mode. Empty (default) means MU edits stay 403'd —
+      operators edit ``cowork.toml`` and restart the server. Single-
+      user mode bypasses this gate entirely (the only user is the
+      operator by definition).
     """
 
     token: str = ""
     keys: dict[str, str] = Field(default_factory=dict)
+    operator: str = ""
+
+    @field_validator("keys")
+    @classmethod
+    def _reject_duplicate_labels(
+        cls, value: dict[str, str],
+    ) -> dict[str, str]:
+        """R3 mitigation — reject duplicate labels at config load
+        time so the operator gate is never silently ambiguous.
+        ``cfg.auth.operator`` matches against labels (the dict's
+        values), not API keys; if two keys share a label, the gate
+        can't distinguish which user is the operator."""
+        seen: set[str] = set()
+        for label in value.values():
+            if label in seen:
+                raise ValueError(
+                    f"duplicate label {label!r} in [auth].keys — "
+                    f"labels must be unique for the operator gate "
+                    f"to work. Rename one of the duplicates.",
+                )
+            seen.add(label)
+        return value
 
 
 class CompactionConfig(BaseModel):

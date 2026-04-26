@@ -174,6 +174,26 @@ export interface HealthInfo {
    *  ``COWORK_CONFIG_PATH``). When false, Settings renders the
    *  config blocks read-only with an "env-only mode" notice. */
   has_config_file?: boolean;
+  /** Slice U1 — caller can edit workspace-wide settings (model +
+   *  compaction). True in single-user mode; in multi-user mode iff
+   *  the caller's user label matches ``cfg.auth.operator``. */
+  is_operator?: boolean;
+  /** Slice U1 — ``cfg.auth.operator`` is non-empty. Lets the UI
+   *  distinguish "no operator configured" from "operator is someone
+   *  else" so the notice text is accurate. */
+  operator_configured?: boolean;
+}
+
+/** Slice U1 — ``GET /v1/config/effective``. ``source`` maps each
+ *  dotted setting key to where its current value came from
+ *  (``"db"`` for keys overridden in multi-user mode's
+ *  ``workspace_settings`` table, ``"toml"`` for keys coming from
+ *  ``cowork.toml`` defaults). The Settings UI uses it to render
+ *  ``(db)`` / ``(toml)`` source badges next to each editable field. */
+export interface EffectiveConfig {
+  model: ConfigModelView;
+  compaction: ConfigCompactionView;
+  source: Record<string, "db" | "toml" | string>;
 }
 
 /* ───────── Settings UI editors (Slice T1/T2) ───────── */

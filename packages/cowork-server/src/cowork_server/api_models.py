@@ -183,6 +183,18 @@ class HealthResponse(BaseModel):
     # gates the PUT-config affordances on this; env-only mode renders
     # the blocks read-only with a "no config file" notice.
     has_config_file: bool = False
+    # Slice U1 — ``True`` iff the calling user can edit workspace-wide
+    # settings (model + compaction). Single-user mode: always True
+    # (the local user is the operator by definition). Multi-user mode:
+    # True iff ``cfg.auth.operator`` is set AND matches the caller's
+    # user label. The UI gates editor affordances on this.
+    is_operator: bool = False
+    # Slice U1 — ``True`` iff ``cfg.auth.operator`` is non-empty.
+    # Lets the UI distinguish "no operator configured (your edits are
+    # blocked, ask the deployer to set [auth].operator)" from
+    # "operator is someone else (only they can edit)" so the notice
+    # text is right.
+    operator_configured: bool = False
 
 
 # ── Tag: projects ──────────────────────────────────────────────────
@@ -509,6 +521,22 @@ class ConfigCompactionView(BaseModel):
     overlap_size: int
     token_threshold: int
     event_retention_size: int
+
+
+class EffectiveConfig(BaseModel):
+    """Returned by ``GET /v1/config/effective`` (Slice U1).
+
+    The ``source`` map names where each setting's current value came
+    from — ``"db"`` for keys overridden in
+    ``multiuser.db.workspace_settings``, ``"toml"`` for keys coming
+    from ``cowork.toml`` defaults. The UI uses it to render
+    ``(db)`` / ``(toml)`` badges next to each editable field so the
+    operator can see at a glance whether their save took.
+    """
+
+    model: ConfigModelView
+    compaction: ConfigCompactionView
+    source: dict[str, str]
 
 
 # ── Tag: profile (Slice T1) ────────────────────────────────────────

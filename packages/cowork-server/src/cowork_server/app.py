@@ -98,6 +98,7 @@ from cowork_server.api_models import (
     ConfigCompactionView,
     ConfigModelPatch,
     ConfigModelView,
+    EffectiveConfig,
     McpDisabledResponse,
     MemoryPageContent,
     MemoryPageList,
@@ -194,6 +195,10 @@ def create_app(
         )
     guard = create_guard(token, cfg.auth.keys or None)
     runtime: CoworkRuntime = build_runtime(cfg, config_path=config_path)
+    # U1 — pick up the boot-merged config so route handlers see the
+    # effective values (TOML defaults overlaid by DB overrides in MU).
+    # ``runtime.cfg`` is the canonical merged source going forward.
+    cfg = runtime.cfg
 
     cache_dir = runtime.workspace.root / "global" / ".preview-cache"
     preview_cache = PreviewCache(cache_dir)
@@ -240,7 +245,9 @@ def create_app(
         summary="Service status + active model",
         response_model=HealthResponse,
     )
-    async def health() -> dict[str, Any]:
+    async def health(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
         """Service + per-component status.
 
         ``backend`` names the runtime backend in use (today always
@@ -248,7 +255,14 @@ def create_app(
         distributed deployments extend this with ``eventbus``,
         ``sessions``, etc. ``auth`` reports whether multi-user keys are
         configured, so clients can distinguish sidecar from hosted.
+
+        ``is_operator`` (Slice U1) is computed per-request — it
+        reports whether THIS caller can edit workspace-wide
+        settings (model + compaction). The UI uses this to gate
+        editor affordances.
         """
+        from cowork_server.auth import is_operator
+
         return {
             "status": "ok",
             "backend": cfg.runtime.backend,
@@ -301,6 +315,13 @@ def create_app(
             # ``COWORK_CONFIG_PATH``).
             "is_multi_user": bool(runtime.multi_user),
             "has_config_file": runtime.config_path is not None,
+            # Slice U1 — operator gate state. ``is_operator`` is the
+            # per-request check (caller's label vs configured operator);
+            # ``operator_configured`` is the global flag used by the UI
+            # to branch the read-only notice text between
+            # "no operator configured" and "operator is someone else".
+            "is_operator": is_operator(cfg, user),
+            "operator_configured": bool(cfg.auth.operator),
         }
 
     # ── Policy (per-session, falls back to server default) ─────────────
@@ -926,104 +947,193 @@ def create_app(
             "servers": [_status_payload(s) for s in runtime.mcp_status.values()],
         }
 
-    # ── Workspace-wide config edits (Slice T1) ─────────────────────────
+    # ── Workspace-wide config edits (Slice T1, refined in U1) ──────────
 
-    def _require_writable_config() -> Path:
-        """Return ``runtime.config_path`` or raise the right HTTP error.
-        503 in env-only mode (no TOML to write); 403 in multi-user mode
-        (workspace-wide config is operator-managed out of band)."""
-        if runtime.multi_user:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "workspace-wide config is read-only in multi-user "
-                    "mode; the operator edits cowork.toml and restarts "
-                    "the server"
-                ),
-            )
-        if runtime.config_path is None:
+    def _require_writable_workspace_settings(user: UserIdentity) -> Any:
+        """Return ``runtime.workspace_settings_store`` or raise the
+        right HTTP error.
+
+        503 when there's no editable surface (env-only SU mode →
+        store is None). 403 in multi-user mode when the caller isn't
+        the configured operator (or no operator is configured at all
+        — branched message). Single-user mode passes through (the
+        local user is the operator by definition).
+        """
+        from cowork_server.auth import is_operator
+
+        if runtime.workspace_settings_store is None:
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "no cowork.toml in use (server started in env-only "
-                    "mode); set COWORK_CONFIG_PATH and restart to enable "
+                    "no editable settings surface (env-only SU mode); "
+                    "set COWORK_CONFIG_PATH and restart to enable "
                     "in-app config edits"
                 ),
             )
-        return runtime.config_path
+        if runtime.multi_user and not is_operator(cfg, user):
+            if not cfg.auth.operator:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "workspace-wide config is operator-only and no "
+                        "operator is configured for this server. Set "
+                        "[auth].operator in cowork.toml to a user label "
+                        "from [auth].keys, then restart."
+                    ),
+                )
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"workspace-wide config is operator-only; "
+                    f"only the configured operator "
+                    f"(label='{cfg.auth.operator}') can edit shared "
+                    f"settings"
+                ),
+            )
+        return runtime.workspace_settings_store
+
+    def _log_settings_change(section: str, patch: dict[str, Any], user: UserIdentity) -> None:
+        """R5 — log every workspace-settings PUT with the destination
+        and operator label so operators tailing logs can answer
+        'where did my edit go'."""
+        keys = ", ".join(f"{section}.{k}" for k in patch)
+        destination = "multiuser.db" if runtime.multi_user else "cowork.toml"
+        print(
+            f"[settings] {keys} updated → {destination} "
+            f"(operator={user.label})",
+            flush=True,
+        )
 
     @app.put(
         "/v1/config/model",
         tags=["config"],
-        summary="Update [model] in cowork.toml",
+        summary="Update [model] config",
         response_model=ConfigModelView,
     )
     async def update_config_model(
         body: ConfigModelPatch,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, Any]:
-        """Mutate the ``[model]`` section of ``cowork.toml`` in place.
+        """Mutate the ``[model]`` section of the workspace settings.
 
-        Single-user only. ``api_key`` accepts a literal secret or an
-        ``"env:VAR"`` reference; the writer doesn't resolve env vars
-        — it stores the string verbatim. **Comment + custom whitespace
-        are NOT preserved** by the underlying ``tomli_w`` writer; users
-        who want comments keep them in a separate ``cowork.toml.example``.
+        Single-user mode: writes directly to ``cowork.toml``. Multi-
+        user mode: requires operator identity; writes to a DB-backed
+        override layer in ``<workspace>/multiuser.db``. ``api_key``
+        accepts a literal secret or an ``"env:VAR"`` reference (stored
+        verbatim).
 
         Takes effect on next server restart. The UI surfaces a
         "restart required" banner after a successful save.
         """
-        from cowork_core.config_writer import ConfigWriteError, update_toml_section
-
-        config_path = _require_writable_config()
+        store = _require_writable_workspace_settings(user)
         patch = body.model_dump(exclude_none=True)
         try:
-            data = update_toml_section(config_path, "model", patch)
-        except ConfigWriteError as exc:
+            section = store.set_section("model", patch)
+        except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        model_section = data.get("model") or {}
+        _log_settings_change("model", patch, user)
         return {
-            "base_url": model_section.get("base_url", cfg.model.base_url),
-            "model": model_section.get("model", cfg.model.model),
-            "api_key": model_section.get("api_key", cfg.model.api_key),
+            "base_url": section.get("base_url", cfg.model.base_url),
+            "model": section.get("model", cfg.model.model),
+            "api_key": section.get("api_key", cfg.model.api_key),
         }
 
     @app.put(
         "/v1/config/compaction",
         tags=["config"],
-        summary="Update [compaction] in cowork.toml",
+        summary="Update [compaction] config",
         response_model=ConfigCompactionView,
     )
     async def update_config_compaction(
         body: ConfigCompactionPatch,
         user: UserIdentity = Depends(guard),
     ) -> dict[str, Any]:
-        """Mutate the ``[compaction]`` section of ``cowork.toml`` in
-        place. Single-user only. Pydantic validates the field ranges
+        """Mutate the ``[compaction]`` section of the workspace
+        settings. Single-user mode writes ``cowork.toml`` directly;
+        multi-user mode writes the DB override layer (operator-only).
+        Pydantic validates the field ranges
         (``compaction_interval >= 1``, ``overlap_size >= 0``,
         ``token_threshold >= 1``, ``event_retention_size >= 0``).
         Takes effect on next server restart."""
-        from cowork_core.config_writer import ConfigWriteError, update_toml_section
-
-        config_path = _require_writable_config()
+        store = _require_writable_workspace_settings(user)
         patch = body.model_dump(exclude_none=True)
         try:
-            data = update_toml_section(config_path, "compaction", patch)
-        except ConfigWriteError as exc:
+            section = store.set_section("compaction", patch)
+        except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        c = data.get("compaction") or {}
+        _log_settings_change("compaction", patch, user)
         return {
-            "enabled": c.get("enabled", cfg.compaction.enabled),
-            "compaction_interval": c.get(
+            "enabled": section.get("enabled", cfg.compaction.enabled),
+            "compaction_interval": section.get(
                 "compaction_interval", cfg.compaction.compaction_interval,
             ),
-            "overlap_size": c.get("overlap_size", cfg.compaction.overlap_size),
-            "token_threshold": c.get(
+            "overlap_size": section.get(
+                "overlap_size", cfg.compaction.overlap_size,
+            ),
+            "token_threshold": section.get(
                 "token_threshold", cfg.compaction.token_threshold,
             ),
-            "event_retention_size": c.get(
+            "event_retention_size": section.get(
                 "event_retention_size", cfg.compaction.event_retention_size,
             ),
+        }
+
+    @app.get(
+        "/v1/config/effective",
+        tags=["config"],
+        summary="Get the effective workspace config + per-key source map",
+        response_model=EffectiveConfig,
+    )
+    async def get_config_effective(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Return merged ``[model]`` + ``[compaction]`` + a per-key
+        source map (``"db"`` for keys overridden in
+        ``multiuser.db.workspace_settings``, ``"toml"`` for keys
+        coming from ``cowork.toml`` defaults).
+
+        Slice U1 — the UI uses this to render ``(db)`` / ``(toml)``
+        source badges next to each editable field. Loaded on Settings
+        mount and refreshed after each save.
+        """
+        # Source map starts out all "toml" (the boot default); any
+        # key present in the store's overrides flips to "db" or
+        # "toml" depending on which backing wrote it.
+        overrides: dict[str, dict[str, Any]] = {}
+        if runtime.workspace_settings_store is not None:
+            try:
+                overrides = runtime.workspace_settings_store.get_overrides()
+            except Exception:
+                overrides = {}
+        # In MU the overrides come from DB; in SU they came from TOML
+        # already (FS backing reads cowork.toml).
+        source_label = "db" if runtime.multi_user else "toml"
+        sources: dict[str, str] = {}
+        for section, fields in overrides.items():
+            for leaf in fields:
+                sources[f"{section}.{leaf}"] = source_label
+        # Default any non-overridden key to "toml" (the boot default).
+        for key in (
+            "model.base_url", "model.model", "model.api_key",
+            "compaction.enabled", "compaction.compaction_interval",
+            "compaction.overlap_size", "compaction.token_threshold",
+            "compaction.event_retention_size",
+        ):
+            sources.setdefault(key, "toml")
+        return {
+            "model": {
+                "base_url": cfg.model.base_url,
+                "model": cfg.model.model,
+                "api_key": cfg.model.api_key,
+            },
+            "compaction": {
+                "enabled": cfg.compaction.enabled,
+                "compaction_interval": cfg.compaction.compaction_interval,
+                "overlap_size": cfg.compaction.overlap_size,
+                "token_threshold": cfg.compaction.token_threshold,
+                "event_retention_size": cfg.compaction.event_retention_size,
+            },
+            "source": sources,
         }
 
     # ── Per-user profile (Slice T1) ────────────────────────────────────

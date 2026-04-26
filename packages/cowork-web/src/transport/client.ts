@@ -14,6 +14,7 @@ import type {
   ConfigCompactionView,
   ConfigModelPatch,
   ConfigModelView,
+  EffectiveConfig,
   FileEntry,
   HealthInfo,
   LocalFileListResult,
@@ -488,6 +489,19 @@ export class CoworkClient {
       const detail = await r.text();
       throw new Error(`updateConfigCompaction: ${r.status} — ${detail}`);
     }
+    return r.json();
+  }
+
+  /** Slice U1 — read the effective workspace config + per-key source
+   *  map. The Settings UI uses ``source[<dotted-key>]`` to render
+   *  ``(db)`` / ``(toml)`` badges next to each editable field so
+   *  operators see at a glance which values came from DB overrides
+   *  vs TOML defaults. Refresh after every save. */
+  async getEffectiveConfig(): Promise<EffectiveConfig> {
+    const r = await fetch(`${this.baseUrl}/v1/config/effective`, {
+      headers: this.jsonHeaders(),
+    });
+    if (!r.ok) throw new Error(`getEffectiveConfig: ${r.status}`);
     return r.json();
   }
 

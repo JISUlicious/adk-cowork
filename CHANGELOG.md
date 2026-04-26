@@ -276,6 +276,63 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Multi-user workspace settings — Slice U1 (operator gate + DB-backed config) (2026-04-26)
+
+Lifts T1's blanket 403 on multi-user PUT routes. Workspace-wide
+config (model + compaction) is now editable in MU by an explicit
+operator role; values land in a new `workspace_settings` table in
+`<workspace>/multiuser.db` rather than `cowork.toml`. Single-user
+mode keeps writing TOML directly via the existing
+`config_writer.py` — no behaviour change for the desktop sidecar.
+
+Five risk mitigations from planning are folded in as
+design-enforced (not just documented):
+
+- **R1** — `SqliteWorkspaceSettingsStore` opens its own SQLite
+  connection rather than refactoring `_build_sqlite_stores` to
+  share. WAL handles concurrent connections fine.
+- **R2** — `_merge_overrides` is module-private to `runner.py` (no
+  `__init__.py` re-export), preventing future contributors from
+  calling it per-turn. Boot-only invariant.
+- **R3** — Pydantic validator on `AuthConfig.keys` rejects
+  duplicate labels at config load (the operator gate matches by
+  label; ambiguous labels would break the gate). Defence-in-depth
+  in the runtime gate refuses + logs if multiple keys somehow
+  share the operator's label.
+- **R4** — startup warning emitted when SU mode boots over a
+  populated `multiuser.db.workspace_settings` table (mode-flip
+  residue). Operator notices instead of being silently surprised
+  that TOML edits aren't reflected.
+- **R5** — three-layer reinforcement so "where did my edit go" is
+  never a mystery: server-side log line on every PUT
+  (`[settings] model.foo updated → multiuser.db (operator=alice)`);
+  `GET /v1/config/effective` returns a per-key `source` map; UI
+  renders `(db)` / `(toml)` badges next to each editable field
+  via a new `<SourceBadge>` component.
+
+- add `packages/cowork-core/src/cowork_core/storage/workspace_settings.py` — `WorkspaceSettingsStore` Protocol, `FSWorkspaceSettingsStore` (wraps `config_writer.update_toml_section`), `SqliteWorkspaceSettingsStore` (KV table with dotted keys, JSON-encoded values, owns its own connection)
+- update `packages/cowork-core/src/cowork_core/storage/factory.py` — `build_workspace_settings_store(cfg, workspace, config_path)`; SU → FS, MU → SQLite, env-only SU → None
+- update `packages/cowork-core/src/cowork_core/storage/__init__.py` — re-export new types
+- update `packages/cowork-core/src/cowork_core/config.py` — `AuthConfig.operator: str = ""`; `@field_validator` rejects duplicate labels in `keys`
+- update `packages/cowork-core/src/cowork_core/runner.py` — `runtime.workspace_settings_store` field; boot-time merge in `build_runtime` via private `_merge_overrides` (model + compaction sections only); R4 startup warning via `_warn_mode_mismatch`
+- update `packages/cowork-server/src/cowork_server/auth.py` — new `is_operator(cfg, user)` helper with R3 defence-in-depth (refuses ambiguous labels)
+- update `packages/cowork-server/src/cowork_server/api_models.py` — `HealthResponse` gains `is_operator: bool = False` + `operator_configured: bool = False`; new `EffectiveConfig` model with `source` map
+- update `packages/cowork-server/src/cowork_server/app.py`:
+  - `_require_writable_workspace_settings(user)` replaces `_require_writable_config`; routes through `runtime.workspace_settings_store` regardless of mode; 503 when store None, 403 with branched message in MU non-operator paths
+  - PUT routes for model + compaction route through the store and emit R5 log lines
+  - new `GET /v1/config/effective` route under `config` tag
+  - health route gains `is_operator` (per-request) + `operator_configured` (global flag)
+  - `cfg = runtime.cfg` after `build_runtime` so route handlers see the merged values
+- update `packages/cowork-web/src/transport/types.ts` — `HealthInfo.is_operator?` + `operator_configured?`; new `EffectiveConfig` interface
+- update `packages/cowork-web/src/transport/client.ts` — `getEffectiveConfig()` method
+- update `packages/cowork-web/src/components/Settings.tsx`:
+  - `editsBlocked` flips from `isMu || !hasConfigFile` to `!is_operator` (with env-only fallback); reason text branches on `operator_configured`
+  - `SecSystem` fetches `/v1/config/effective` on mount + after each save; passes `sourceMap` down to `SecConfigModel` + `SecConfigCompaction`
+  - new `<SourceBadge value={...}>` component renders `(db)` / `(toml)` next to each editable field label
+- add `tests/test_workspace_settings.py` — 24 new tests covering protocol round-trips per backing, factory dispatch, boot-time merge in MU, R3 validator + runtime defence, R4 startup warning, R5 log-line emission, operator gate (set/unset/operator/non-operator), PUT routes in SU + MU, `/v1/config/effective` source map (SU all "toml" / MU mixed)
+- update `README.md` — feature row "Multi-user: operator gate + DB-backed workspace settings + (db)/(toml) source badges"
+- 335 total tests green (was 311, +24)
+
 ### Server package split — Slice U0 (cowork-server-app + cowork-server-web) (2026-04-26)
 
 Architectural prep for decoupling app vs web releases. `cowork-server`
