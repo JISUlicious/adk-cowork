@@ -192,10 +192,12 @@ def test_build_runtime_merges_db_overrides_in_mu(tmp_path: Path) -> None:
 
 
 def test_build_runtime_warns_on_su_with_populated_db(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """R4 — startup warning when SU mode boots over a DB with rows
-    in ``workspace_settings`` (mode-flip residue)."""
+    in ``workspace_settings`` (mode-flip residue). V4c — emitted via
+    the structured logger (``cowork.storage``); use ``caplog``."""
+    import logging
     from cowork_core.runner import build_runtime
 
     db_path = tmp_path / "multiuser.db"
@@ -204,9 +206,10 @@ def test_build_runtime_warns_on_su_with_populated_db(
     conn.close()
 
     cfg = CoworkConfig(workspace=WorkspaceConfig(root=tmp_path))
-    build_runtime(cfg)
-    captured = capsys.readouterr()
-    assert "[storage] SU mode but workspace_settings table has 1 rows" in captured.out
+    with caplog.at_level(logging.WARNING, logger="cowork.storage"):
+        build_runtime(cfg)
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "SU mode but workspace_settings table has 1 rows" in messages
 
 
 # ──────────────── R3 — duplicate label validator ────────────────
@@ -320,14 +323,16 @@ def test_put_model_in_mu_non_operator_403s(tmp_path: Path) -> None:
 
 
 def test_put_model_in_mu_operator_writes_db(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
+    import logging
     client = _mu_client(tmp_path, operator="alice")
-    r = client.put(
-        "/v1/config/model",
-        headers={"x-cowork-token": "alice-k"},
-        json={"model": "claude-sonnet"},
-    )
+    with caplog.at_level(logging.INFO, logger="cowork.settings"):
+        r = client.put(
+            "/v1/config/model",
+            headers={"x-cowork-token": "alice-k"},
+            json={"model": "claude-sonnet"},
+        )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["model"] == "claude-sonnet"
@@ -340,10 +345,18 @@ def test_put_model_in_mu_operator_writes_db(
     ).fetchall()
     keys = {r[0] for r in rows}
     assert "model.model" in keys
-    # R5 — log line emitted on save.
-    captured = capsys.readouterr()
-    assert "[settings] model.model updated → multiuser.db" in captured.out
-    assert "operator=alice" in captured.out
+    # R5 / V4c — structured log line emitted on save.
+    record = next(
+        (r for r in caplog.records if r.name == "cowork.settings"),
+        None,
+    )
+    assert record is not None
+    assert "model.model updated → multiuser.db" in record.getMessage()
+    # Structured payload exposes operator + section + keys.
+    assert getattr(record, "event", None) == "settings_change"
+    assert getattr(record, "operator", None) == "alice"
+    assert getattr(record, "section", None) == "model"
+    assert "model" in getattr(record, "keys", [])
 
 
 def test_put_compaction_in_mu_validates_ranges(tmp_path: Path) -> None:
@@ -412,3 +425,123 @@ def test_health_is_operator_mu_per_caller(tmp_path: Path) -> None:
     bob = client.get("/v1/health", headers={"x-cowork-token": "bob-k"}).json()
     assert bob["is_operator"] is False
     assert bob["operator_configured"] is True
+
+
+# ──────────────── V4b — OCC versioning ────────────────
+
+
+def test_sqlite_store_version_increments_on_set() -> None:
+    """SQLite backing tracks per-section OCC counter."""
+    conn = _open_sqlite(":memory:")
+    store = SqliteWorkspaceSettingsStore(conn)
+    assert store.get_version("model") == 0
+    store.set_section("model", {"model": "x"})
+    assert store.get_version("model") == 1
+    store.set_section("model", {"base_url": "y"})
+    assert store.get_version("model") == 2
+    # Different section, independent counter.
+    assert store.get_version("compaction") == 0
+    store.set_section("compaction", {"enabled": False})
+    assert store.get_version("compaction") == 1
+
+
+def test_fs_store_version_is_always_zero(tmp_path: Path) -> None:
+    """SU FS backing returns 0 — single client, no OCC needed."""
+    cfg_path = tmp_path / "cowork.toml"
+    cfg_path.write_text("[model]\n", encoding="utf-8")
+    from cowork_core.storage import FSWorkspaceSettingsStore
+
+    store = FSWorkspaceSettingsStore(cfg_path)
+    assert store.get_version("model") == 0
+    store.set_section("model", {"model": "x"})
+    assert store.get_version("model") == 0  # no increment in FS
+
+
+def test_effective_route_includes_versions_in_mu(tmp_path: Path) -> None:
+    client = _mu_client(tmp_path, operator="alice")
+    # Trigger one save.
+    client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k"},
+        json={"model": "claude-sonnet"},
+    )
+    r = client.get(
+        "/v1/config/effective",
+        headers={"x-cowork-token": "alice-k"},
+    )
+    body = r.json()
+    assert body["versions"]["model"] == 1
+    assert body["versions"]["compaction"] == 0
+
+
+def test_put_with_matching_if_match_succeeds(tmp_path: Path) -> None:
+    client = _mu_client(tmp_path, operator="alice")
+    # Initial PUT (no If-Match): version → 1.
+    client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k"},
+        json={"model": "first"},
+    )
+    # Subsequent PUT WITH the right version → 200.
+    r = client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k", "If-Match": "1"},
+        json={"model": "second"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_put_with_stale_if_match_returns_409(tmp_path: Path) -> None:
+    client = _mu_client(tmp_path, operator="alice")
+    client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k"},
+        json={"model": "first"},
+    )
+    # Now version is 1. Client sends stale 0 → 409.
+    r = client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k", "If-Match": "0"},
+        json={"model": "evil"},
+    )
+    assert r.status_code == 409
+    assert "version mismatch" in r.json()["detail"]
+    # Confirm no write happened — version still at 1, not 2.
+    eff = client.get(
+        "/v1/config/effective",
+        headers={"x-cowork-token": "alice-k"},
+    ).json()
+    assert eff["versions"]["model"] == 1
+    # source map shows model.model was overridden in DB by the FIRST
+    # successful PUT, not the rejected stale one.
+    assert eff["source"]["model.model"] == "db"
+
+
+def test_put_without_if_match_succeeds_back_compat(tmp_path: Path) -> None:
+    """Clients that don't know about V4b's OCC keep working —
+    If-Match is purely opt-in."""
+    client = _mu_client(tmp_path, operator="alice")
+    # Two PUTs without If-Match — both succeed.
+    r1 = client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k"},
+        json={"model": "v1"},
+    )
+    assert r1.status_code == 200
+    r2 = client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k"},
+        json={"model": "v2"},
+    )
+    assert r2.status_code == 200
+
+
+def test_put_with_malformed_if_match_400(tmp_path: Path) -> None:
+    client = _mu_client(tmp_path, operator="alice")
+    r = client.put(
+        "/v1/config/model",
+        headers={"x-cowork-token": "alice-k", "If-Match": "not-a-number"},
+        json={"model": "x"},
+    )
+    assert r.status_code == 400
+    assert "If-Match must be an integer" in r.json()["detail"]

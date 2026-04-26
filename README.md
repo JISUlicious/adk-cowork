@@ -247,6 +247,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Audit log: per-tool capture policy + SQLite sink + GET /v1/audit + Settings UI tail | Core / Server / Settings | wired | V1 |
 | Live runtime reload: POST /v1/runtime/reload + "Reload now" banner replaces restart-required UX | Core / Server / Settings | wired | V2 |
 | Skill marketplace: install via vercel-labs/skills (`npx skills add <source>`) + skills.sh discovery | Core / Server / Settings | wired | V3 |
+| Mitigations: TOML comment preservation (tomlkit) + per-section OCC (`If-Match`) + JSON structured logging | Core / Server | wired | V4 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

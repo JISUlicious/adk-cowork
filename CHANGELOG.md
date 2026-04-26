@@ -276,6 +276,56 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Mitigations bundle — Slice V4 (TOML preservation + OCC + structured logging + cfg audit) (2026-04-26)
+
+Four small, targeted hardenings that close the rough edges around the
+new editable-config + reload + audit surface. Each tackles a distinct
+risk; bundled into one slice because each is small and they share the
+"nothing surprising should happen" theme.
+
+**V4a — TOML round-trip preservation.** `_update_toml_section` used
+`tomllib` (read) + `tomli_w` (write), which preserved no comments and
+collapsed whitespace. Operators editing `cowork.toml` lose their inline
+notes on the next `PUT /v1/config/*`. Switched to `tomlkit` which
+round-trips comments + ordering + spacing as written.
+
+**V4b — Concurrent-PUT optimistic concurrency control.** Two operators
+saving conflicting model edits at once would silently last-write-wins.
+Added `workspace_settings_meta(section, version)` table; every
+`set_section` UPSERTs an incremented version. `GET /v1/config/effective`
+returns the current per-section versions; PUT routes accept an optional
+`If-Match: <int>` header and return 409 on mismatch (400 on malformed).
+Opt-in — old clients keep working.
+
+**V4c — Structured logging.** Replaced ad-hoc `print(...)` lines
+(`[storage]`, `[settings]`) with stdlib `logging` calls under named
+loggers (`cowork.storage`, `cowork.settings`). New `setup_logging()`
+attaches a `JsonFormatter` to the `cowork.*` tree that emits one JSON
+line per record with merged `extra={...}` keys. Operators can now grep
+audit/settings events in production log streams.
+
+**V4d — cfg-source-of-truth audit.** Documented (and verified) the
+"`runtime.cfg` is the source of truth post-merge" rule in
+`ARCHITECTURE.md`. After U1 (`_merge_overrides` at boot) + V2
+(`runtime.reload()`), the rule is: anywhere reading
+`cfg.model.*` / `cfg.compaction.*` / any editable section MUST go
+through `runtime.cfg` (or a closure-bound `cfg` that gets rebound on
+reload — see V2's `nonlocal cfg` pattern). Audit found no live bugs;
+the doc note prevents future drift.
+
+- update `cowork-core/pyproject.toml` — `tomli-w>=1.0` → `tomlkit>=0.13`
+- update `cowork_core/config_writer.py` — switch to tomlkit; preserves comments + key order + whitespace; new `_is_table` + `_doc_to_dict` helpers
+- update `cowork_core/storage/workspace_settings.py` — new `workspace_settings_meta(section, version, updated_at)` table; `set_section` UPSERTs version; new `get_version(section) -> int` on Protocol; FS returns 0 always (single-client SU); SQLite returns counter
+- update `cowork_server/api_models.py` — `EffectiveConfig.versions: dict[str, int]`
+- update `cowork_server/app.py` — `_check_if_match` helper; `if_match: str | None = Header(default=None, alias="If-Match")` on PUT routes; 409 on mismatch + 400 on malformed; structured-logging migration on the settings PUT
+- add `cowork_core/logging_setup.py` — `JsonFormatter` (merges `extra={...}` flat, escapes reserved record fields, `default=str`) + `setup_logging(level)` (idempotent: clears prior handlers, sets `cowork` logger to non-propagating stdout JSON, single handler)
+- update `cowork_core/runner.py` — `[storage]` print → `logging.getLogger("cowork.storage").warning(...)` (R4 mode-flip warning)
+- update `ARCHITECTURE.md` — new "Effective config — `runtime.cfg` is the source of truth" subsection (V4d)
+- update `tests/test_settings.py` — new `test_update_toml_section_preserves_comments` (V4a regression guard)
+- update `tests/test_workspace_settings.py` — 7 new OCC tests (version starts at 0, increments on first set, increments on update, FS always 0, /v1/config/effective surfaces versions, PUT with stale If-Match → 409, PUT with malformed → 400)
+- add `tests/test_logging_setup.py` — 4 new tests (JsonFormatter emits valid JSON, merges `extra={...}` keys, setup_logging is idempotent, writes to stdout); autouse fixture restores `cowork` logger state across tests so `caplog` keeps working in other files
+- 387 total tests green (was 375, +12)
+
 ### Skill marketplace via vercel-labs/skills — Slice V3 (2026-04-26)
 
 Online skill discovery + install. The Settings → Skills tab gets a

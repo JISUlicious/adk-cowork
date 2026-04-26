@@ -18,7 +18,7 @@ dependencies = [
     "matplotlib>=3.9",
     "markdown-it-py>=3",
     "Pillow>=10",
-    "tomli-w>=1.0",
+    "tomlkit>=0.13",
 ]
 
 [build-system]

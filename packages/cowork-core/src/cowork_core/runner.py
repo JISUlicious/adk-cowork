@@ -1850,12 +1850,13 @@ def _warn_mode_mismatch(cfg: CoworkConfig, workspace: Workspace) -> None:
         # Any other DB read failure: best-effort warning, don't block boot.
         return
     if count > 0:
-        print(
-            f"[storage] SU mode but workspace_settings table has "
-            f"{count} rows from prior MU deployment — those overrides "
-            f"are inactive in SU. Edit cowork.toml directly or switch "
-            f"back to MU mode to use them.",
-            flush=True,
+        import logging as _logging
+        _logging.getLogger("cowork.storage").warning(
+            "SU mode but workspace_settings table has %d rows from prior "
+            "MU deployment — those overrides are inactive in SU. Edit "
+            "cowork.toml directly or switch back to MU mode to use them.",
+            count,
+            extra={"event": "su_with_orphaned_mu_settings", "row_count": count},
         )
 
 

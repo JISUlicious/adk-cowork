@@ -102,6 +102,33 @@ def test_update_toml_section_raises_on_invalid_toml(tmp_path: Path) -> None:
         update_toml_section(p, "model", {})
 
 
+def test_update_toml_section_preserves_comments(tmp_path: Path) -> None:
+    """V4a — comments + whitespace round-trip across the writer.
+    Pre-V4a (under tomli_w) this would lose every comment."""
+    p = tmp_path / "cowork.toml"
+    p.write_text(
+        "# Top-of-file note from the operator\n"
+        "\n"
+        "[model]\n"
+        "# pin to the same model in dev as in prod\n"
+        'model = "old"\n'
+        'base_url = "http://old/v1"  # internal proxy\n'
+        "\n"
+        "[workspace]\n"
+        "# Default workspace for the team.\n"
+        "root = '/tmp/ws'\n",
+        encoding="utf-8",
+    )
+    update_toml_section(p, "model", {"model": "new"})
+    after = p.read_text(encoding="utf-8")
+    assert "# Top-of-file note from the operator" in after
+    assert "# pin to the same model in dev as in prod" in after
+    assert "# internal proxy" in after
+    assert "# Default workspace for the team." in after
+    # And the edit landed.
+    assert 'model = "new"' in after
+
+
 # ───────────────────────── PUT /v1/config/model ─────────────────────────
 
 

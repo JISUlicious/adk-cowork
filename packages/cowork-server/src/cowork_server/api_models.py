@@ -581,7 +581,7 @@ class AuditQueryResponse(BaseModel):
 
 
 class EffectiveConfig(BaseModel):
-    """Returned by ``GET /v1/config/effective`` (Slice U1).
+    """Returned by ``GET /v1/config/effective`` (Slice U1, V4b).
 
     The ``source`` map names where each setting's current value came
     from — ``"db"`` for keys overridden in
@@ -589,11 +589,18 @@ class EffectiveConfig(BaseModel):
     from ``cowork.toml`` defaults. The UI uses it to render
     ``(db)`` / ``(toml)`` badges next to each editable field so the
     operator can see at a glance whether their save took.
+
+    ``versions`` (V4b) — per-section OCC counter. Clients echo it
+    back on PUT via the ``If-Match`` header to detect concurrent
+    edits. SU FS backing always returns 0 (single client; OCC
+    isn't needed). MU SQLite backing increments on every save.
+    Mismatch → 409 Conflict on the PUT.
     """
 
     model: ConfigModelView
     compaction: ConfigCompactionView
     source: dict[str, str]
+    versions: dict[str, int] = Field(default_factory=dict)
 
 
 # ── Tag: profile (Slice T1) ────────────────────────────────────────

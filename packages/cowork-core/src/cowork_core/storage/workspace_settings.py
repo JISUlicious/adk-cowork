@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS workspace_settings_meta (
+    section TEXT NOT NULL PRIMARY KEY,
+    version INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -57,6 +62,13 @@ class WorkspaceSettingsStore(Protocol):
     ) -> dict[str, Any]:
         """Merge ``patch`` into ``section``. ``None`` values are
         treated as 'leave alone'. Returns the resulting section."""
+        ...
+
+    def get_version(self, section: str) -> int:
+        """Slice V4b — return the OCC version for ``section``.
+        Increments on every successful ``set_section``. SU FS
+        backing returns 0 always (one writer, no OCC needed); the
+        SQLite backing returns the persisted counter."""
         ...
 
 
@@ -95,6 +107,11 @@ class FSWorkspaceSettingsStore(WorkspaceSettingsStore):
             raise
         out = data.get(section)
         return dict(out) if isinstance(out, dict) else {}
+
+    def get_version(self, section: str) -> int:
+        """SU FS backing — version 0 always. Single-user mode has
+        one client; concurrent-PUT collisions don't happen."""
+        return 0
 
 
 def _now_iso() -> str:
@@ -155,6 +172,18 @@ class SqliteWorkspaceSettingsStore(WorkspaceSettingsStore):
                     """,
                     (key, json.dumps(value), timestamp),
                 )
+            # V4b — bump the OCC version for this section. UPSERT so
+            # the first write to a new section starts at 1.
+            self._conn.execute(
+                """
+                INSERT INTO workspace_settings_meta (section, version, updated_at)
+                VALUES (?, 1, ?)
+                ON CONFLICT(section) DO UPDATE
+                  SET version = version + 1,
+                      updated_at = excluded.updated_at
+                """,
+                (section, timestamp),
+            )
             # Read back the resulting section.
             rows = self._conn.execute(
                 "SELECT key, value FROM workspace_settings WHERE key LIKE ? || '.%'",
@@ -168,3 +197,14 @@ class SqliteWorkspaceSettingsStore(WorkspaceSettingsStore):
             except (ValueError, TypeError):
                 continue
         return out
+
+    def get_version(self, section: str) -> int:
+        """V4b — current OCC version for ``section``. Returns 0 for
+        sections never written. Clients use this for If-Match style
+        OCC on PUT routes."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT version FROM workspace_settings_meta WHERE section = ?",
+                (section,),
+            ).fetchone()
+        return int(row[0]) if row else 0

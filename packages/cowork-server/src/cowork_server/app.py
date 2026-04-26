@@ -48,6 +48,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi import Header as FastAPIHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.security import APIKeyHeader
@@ -1120,12 +1121,22 @@ def create_app(
 
         keys = ", ".join(f"{section}.{k}" for k in patch)
         destination = "multiuser.db" if runtime.multi_user else "cowork.toml"
-        # Stdout breadcrumb (kept for log-tailers; will move to a
-        # structured logger in V4c).
-        print(
-            f"[settings] {keys} updated → {destination} "
-            f"(operator={user.label})",
-            flush=True,
+        # V4c — structured log line. Replaces the V1 stdout breadcrumb;
+        # operators tailing stdout still see the message (the JSON
+        # formatter writes to stdout) but log aggregators get a
+        # filterable structured record.
+        import logging as _logging
+        _logging.getLogger("cowork.settings").info(
+            "%s updated → %s (operator=%s)",
+            keys, destination, user.label,
+            extra={
+                "event": "settings_change",
+                "section": section,
+                "keys": list(patch.keys()),
+                "destination": destination,
+                "operator": user.label,
+                "user_id": user.user_id,
+            },
         )
         # Structured audit row.
         try:
@@ -1141,6 +1152,32 @@ def create_app(
             result_json=_json.dumps({"destination": destination}),
         ))
 
+    def _check_if_match(
+        section: str, store: Any, if_match_header: str | None,
+    ) -> None:
+        """V4b — OCC check. If the client sent an If-Match header,
+        verify it matches the section's current version. Mismatch →
+        409 Conflict so the UI can prompt the user to reload + retry."""
+        if not if_match_header:
+            return
+        try:
+            client_version = int(if_match_header.strip().strip('"'))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"If-Match must be an integer: {if_match_header!r}",
+            ) from exc
+        current = store.get_version(section)
+        if client_version != current:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"version mismatch: client sent If-Match={client_version} "
+                    f"but {section} is currently at version {current}. "
+                    f"Reload to fetch the current values + retry."
+                ),
+            )
+
     @app.put(
         "/v1/config/model",
         tags=["config"],
@@ -1150,6 +1187,7 @@ def create_app(
     async def update_config_model(
         body: ConfigModelPatch,
         user: UserIdentity = Depends(guard),
+        if_match: str | None = FastAPIHeader(default=None, alias="If-Match"),
     ) -> dict[str, Any]:
         """Mutate the ``[model]`` section of the workspace settings.
 
@@ -1159,10 +1197,16 @@ def create_app(
         accepts a literal secret or an ``"env:VAR"`` reference (stored
         verbatim).
 
+        V4b — supports the ``If-Match: <version>`` header for OCC.
+        Clients echo back the version they fetched from
+        ``/v1/config/effective``; mismatch returns 409 Conflict.
+        Header is optional (back-compat).
+
         Takes effect on next server restart. The UI surfaces a
         "restart required" banner after a successful save.
         """
         store = _require_writable_workspace_settings(user)
+        _check_if_match("model", store, if_match)
         patch = body.model_dump(exclude_none=True)
         try:
             section = store.set_section("model", patch)
@@ -1184,6 +1228,7 @@ def create_app(
     async def update_config_compaction(
         body: ConfigCompactionPatch,
         user: UserIdentity = Depends(guard),
+        if_match: str | None = FastAPIHeader(default=None, alias="If-Match"),
     ) -> dict[str, Any]:
         """Mutate the ``[compaction]`` section of the workspace
         settings. Single-user mode writes ``cowork.toml`` directly;
@@ -1191,8 +1236,11 @@ def create_app(
         Pydantic validates the field ranges
         (``compaction_interval >= 1``, ``overlap_size >= 0``,
         ``token_threshold >= 1``, ``event_retention_size >= 0``).
-        Takes effect on next server restart."""
+        Takes effect on next server restart.
+
+        V4b — supports the ``If-Match: <version>`` header for OCC."""
         store = _require_writable_workspace_settings(user)
+        _check_if_match("compaction", store, if_match)
         patch = body.model_dump(exclude_none=True)
         try:
             section = store.set_section("compaction", patch)
@@ -1295,6 +1343,17 @@ def create_app(
             "compaction.event_retention_size",
         ):
             sources.setdefault(key, "toml")
+        # V4b — per-section OCC versions. SU FS backing always
+        # returns 0; SQLite tracks the real counter.
+        versions: dict[str, int] = {}
+        if runtime.workspace_settings_store is not None:
+            try:
+                versions = {
+                    "model": runtime.workspace_settings_store.get_version("model"),
+                    "compaction": runtime.workspace_settings_store.get_version("compaction"),
+                }
+            except Exception:
+                versions = {}
         return {
             "model": {
                 "base_url": cfg.model.base_url,
@@ -1309,6 +1368,7 @@ def create_app(
                 "event_retention_size": cfg.compaction.event_retention_size,
             },
             "source": sources,
+            "versions": versions,
         }
 
     # ── Audit log (Slice V1) ───────────────────────────────────────────

@@ -325,6 +325,26 @@ inside a tool would mean either spinning up a second `LlmAgent`
 surfaces-never-import-core-internals layering). Dumb appends + a
 schema instruction is the cleaner cut.
 
+### Effective config — `runtime.cfg` is the source of truth
+
+Slice U1 introduced `_merge_overrides(cfg, overrides)` to layer DB
+edits on top of `cowork.toml` defaults at boot. Slice V2 added live
+`runtime.reload()` that re-applies the merge. Both write the merged
+config back to `runtime.cfg`.
+
+**Rule:** anywhere that reads `cfg.model.*`, `cfg.compaction.*`, or
+any other section that's editable via `/v1/config/*`, route through
+`runtime.cfg.<section>.<field>` rather than the original cfg
+parameter. Inside `cowork-server`'s `create_app`, the local name
+`cfg` is rebound to `runtime.cfg` at boot (U1) and again on every
+reload (V2's `nonlocal cfg`), so route handler closures pick up
+the merged values automatically. Outside that closure (tests,
+future code), use `runtime.cfg` directly.
+
+`_merge_overrides` itself is **module-private to `runner.py`** —
+no `__init__.py` re-export — so contributors can't accidentally
+call it per-turn. Boot + reload are the only legitimate sites.
+
 ## 6. File surfaces — managed vs local-dir
 
 Two `ExecEnv` implementations select the agent's filesystem view:
