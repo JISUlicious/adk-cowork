@@ -48,7 +48,12 @@ _FRONTMATTER_FENCE = "---"
 # agent cannot use these — it would be ambiguous when the root routes
 # via ``@<name>``.
 _RESERVED_NAMES: frozenset[str] = frozenset({
-    "researcher", "writer", "analyst", "reviewer", "cowork_root",
+    # The four original built-in specialists.
+    "researcher", "writer", "analyst", "reviewer",
+    # W3 — three new built-ins.
+    "explorer", "planner", "verifier",
+    # The root.
+    "cowork_root",
 })
 
 # Cap on description length that ends up in the root prompt's sub-agent

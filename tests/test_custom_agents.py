@@ -127,7 +127,11 @@ class TestParseAgentMd:
         with pytest.raises(CustomAgentLoadError, match="empty instruction body"):
             parse_agent_md(path, source="user")
 
-    @pytest.mark.parametrize("reserved", ["researcher", "writer", "analyst", "reviewer"])
+    @pytest.mark.parametrize("reserved", [
+        "researcher", "writer", "analyst", "reviewer",
+        "explorer", "planner", "verifier",
+        "cowork_root",
+    ])
     def test_reserved_name_rejected(self, tmp_path: Path, reserved: str) -> None:
         path = tmp_path / f"{reserved}.md"
         path.write_text(
@@ -238,7 +242,11 @@ class TestBuildRootAgentWithCustomAgents:
         cfg = CoworkConfig()
         agent = build_root_agent(cfg, tools=[])
         sub_names = {sa.name for sa in agent.sub_agents}
-        assert sub_names == {"researcher", "writer", "analyst", "reviewer"}
+        # The seven built-ins (W1's four originals + W3's three new).
+        assert sub_names == {
+            "researcher", "writer", "analyst", "reviewer",
+            "explorer", "planner", "verifier",
+        }
 
     def test_custom_agent_appears_alongside_builtins(self, tmp_path: Path) -> None:
         (tmp_path / "legal.md").write_text(_GOOD_FRONTMATTER, encoding="utf-8")

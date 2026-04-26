@@ -547,6 +547,39 @@ runs after. To pass, a tool must satisfy BOTH gates. The user can
 *narrow* the surface from Settings (E.E1) but cannot *widen* it past
 the static gate (W1).
 
+### Built-in specialists (Slice W3)
+
+W3 adds three new built-in sub-agents on top of W1+W2's primitives.
+Each ships with a per-agent default `allowed_tools` tuple in its
+own module; `cfg.agents.<name>.model` (W1) lets operators put cheaper
+endpoints behind any of them.
+
+- `explorer` (`agents/explorer.py`) — fast read-only navigator. Tools:
+  `fs_read`, `fs_glob`, `fs_list`, `fs_stat`, `search_web`,
+  `memory_read`. No mutation, no execution, no `http_fetch`. Use case:
+  "where is X" / "list every Y" queries that the root would otherwise
+  spend its main-model context on. Cowork's analogue of Claude Code's
+  Haiku-class Explore agent.
+- `planner` (`agents/planner.py`) — read-only architectural planner.
+  Tools: `fs_read`, `fs_glob`, `fs_list`, `fs_stat`, `search_web`,
+  `load_skill`, `memory_read`, plus `fs_write` (the policy callback
+  restricts the path to `scratch/plan.md`; the static gate just
+  permits the tool name so the planner can save its output). Tight
+  fit with the existing Plan/Work policy mode: when the session is in
+  plan mode, the root prefers delegating to the planner.
+- `verifier` (`agents/verifier.py`) — adversarial correctness checker.
+  Tools: `fs_read`, `fs_glob`, `fs_list`, `fs_stat`, `python_exec_run`,
+  `search_web`, `load_skill`, `memory_read`, `memory_log`. Read-only
+  for project files (no `fs_write` / `fs_edit` / `fs_promote`);
+  python_exec is necessary so probes can open .docx via python-docx,
+  recompute formulas via openpyxl, validate CSV schemas, etc. Distinct
+  from `reviewer` (which checks style/tone/completeness) — the
+  verifier checks correctness and returns PASS/FAIL/PARTIAL with
+  reproduction steps.
+
+The three new names are added to `_RESERVED_NAMES` in `agents/custom.py`
+so a W2 custom agent can't claim them.
+
 ### Custom sub-agents from Markdown (Slice W2)
 
 Borrowing Claude Code's `.claude/agents/<name>.md` pattern, Cowork

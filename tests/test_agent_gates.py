@@ -97,9 +97,11 @@ class TestSubAgentDefaults:
     """The built-in defaults table is the source of truth for the
     four built-in sub-agents' allowlists when ``cfg.agents`` is empty."""
 
-    def test_all_four_agents_have_defaults(self) -> None:
+    def test_all_builtin_agents_have_defaults(self) -> None:
+        # Four originals + three W3 additions.
         assert set(SUB_AGENT_DEFAULTS.keys()) == {
             "researcher", "writer", "analyst", "reviewer",
+            "explorer", "planner", "verifier",
         }
 
     def test_researcher_default_is_read_only(self) -> None:
@@ -147,8 +149,13 @@ class TestBuildRootAgentWiresGate:
         # non-allowlisted tool name on the root itself.
         assert agent.name == "cowork_root"
         # Sub-agents are reachable via the ADK `sub_agents` field.
+        # W3 added explorer + planner + verifier alongside the four
+        # originals.
         sub_names = {sa.name for sa in agent.sub_agents}
-        assert sub_names == {"researcher", "writer", "analyst", "reviewer"}
+        assert sub_names == {
+            "researcher", "writer", "analyst", "reviewer",
+            "explorer", "planner", "verifier",
+        }
 
     def test_sub_agent_static_gate_blocks_default_excluded_tool(self) -> None:
         """The reviewer's static gate (built from the default allowlist)

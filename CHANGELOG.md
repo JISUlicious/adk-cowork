@@ -276,6 +276,44 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Built-in specialists: Explorer + Planner + Verifier — Slice W3 (2026-04-26)
+
+Three new built-in sub-agents on top of W1+W2's primitives, borrowed
+in concept from Claude Code's `Explore` / `Plan` / `Verification`
+agents but adapted for Cowork's office-work surface.
+
+- **explorer** — strict read-only navigator. Default surface:
+  `fs_read`, `fs_glob`, `fs_list`, `fs_stat`, `search_web`,
+  `memory_read`. No mutation, no execution, no `http_fetch`. Use case:
+  "where is X" / "list every Y" queries that should not burn the main
+  model's context. Operators wanting Claude Code's Haiku-speed effect
+  can set `cfg.agents.explorer.model` (W1) to a cheaper endpoint.
+- **planner** — read-only architectural planner. Default surface adds
+  `fs_write` so it can save its plan to `scratch/plan.md` (the policy
+  callback restricts the path; the static gate just permits the tool
+  name). Designed to dovetail with the existing Plan/Work policy mode.
+- **verifier** — adversarial correctness checker. Read-only for
+  project files but adds `python_exec_run` so it can run real
+  probes (open .docx via python-docx, recompute formulas via
+  openpyxl, validate CSV schemas). Distinct from `reviewer` (style /
+  tone) — verifier returns `PASS` / `FAIL` / `PARTIAL` with
+  reproduction steps.
+
+Reserved-name list extended to include the three new names so a W2
+custom agent can't claim them.
+
+- add `cowork_core/agents/explorer.py` — `EXPLORER_DEFAULT_ALLOWED_TOOLS` + `EXPLORER_INSTRUCTION`
+- add `cowork_core/agents/planner.py` — `PLANNER_DEFAULT_ALLOWED_TOOLS` + `PLANNER_INSTRUCTION` (allowlist includes `fs_write`; path restriction handled by the policy callback in plan mode)
+- add `cowork_core/agents/verifier.py` — `VERIFIER_DEFAULT_ALLOWED_TOOLS` + `VERIFIER_INSTRUCTION` (read-only for project, python_exec for probes)
+- update `cowork_core/agents/root_agent.py:SUB_AGENT_DEFAULTS` — three new entries; `ROOT_TAIL` extended to mention all seven specialists with one-liner intent each
+- update `cowork_core/agents/custom.py:_RESERVED_NAMES` — adds `explorer`, `planner`, `verifier`
+- update `tests/test_agent_gates.py` — sub-agent default count test now expects seven names; root-built sub-agent set assertion updated
+- update `tests/test_custom_agents.py` — `test_no_registry_means_only_builtins` covers the seven built-ins; `test_reserved_name_rejected` parametrize includes the three new names
+- add `tests/test_w3_agents.py` — 13 new tests: explorer surface (no mutation/exec/http; navigation tools present; instruction says read-only; static gate blocks fs_write/shell_run/python_exec); planner surface (fs_write present; arbitrary execution blocked; instruction directs to scratch/plan.md; static gate blocks shell/python/edit); verifier surface (python_exec present; mutation+email blocked; instruction emphasizes break-first + verdict; static gate blocks writes; static gate permits python_exec — distinct from reviewer)
+- update `ARCHITECTURE.md` — new "Built-in specialists (Slice W3)" subsection
+- update `README.md` — feature row for W3; "What's wired" line lists all seven built-ins
+- 442 total tests green (was 425, +17)
+
 ### Custom sub-agents from Markdown — Slice W2 (2026-04-26)
 
 Borrowing the `.claude/agents/<name>.md` pattern from Claude Code:

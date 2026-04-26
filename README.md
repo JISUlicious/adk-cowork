@@ -171,7 +171,7 @@ uv run cowork
 
 ## What's wired
 
-13 tools are registered with the root agent (+ researcher, writer, analyst, reviewer sub-agents that inherit the pool):
+13 tools are registered with the root agent (+ seven specialist sub-agents — researcher, writer, analyst, reviewer, explorer, planner, verifier — each with its own W1 tool surface and optional model override):
 
 | Tool | What it does |
 |---|---|
@@ -250,6 +250,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Mitigations: TOML comment preservation (tomlkit) + per-section OCC (`If-Match`) + JSON structured logging | Core / Server | wired | V4 |
 | Hard tool gates per sub-agent (config-time allow/deny) + per-agent model override | Core | wired | W1 |
 | Custom sub-agents from Markdown (`~/.config/cowork/agents/*.md` + `<workspace>/global/agents/*.md`) | Core / Server | wired | W2 |
+| Built-in sub-agents: explorer (read-only navigator) + planner (Plan-mode plan author) + verifier (adversarial probes) | Core | wired | W3 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

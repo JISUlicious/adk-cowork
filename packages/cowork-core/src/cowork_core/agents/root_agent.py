@@ -23,6 +23,14 @@ from cowork_core.agents.analyst import (
     ANALYST_DEFAULT_ALLOWED_TOOLS,
     ANALYST_INSTRUCTION,
 )
+from cowork_core.agents.explorer import (
+    EXPLORER_DEFAULT_ALLOWED_TOOLS,
+    EXPLORER_INSTRUCTION,
+)
+from cowork_core.agents.planner import (
+    PLANNER_DEFAULT_ALLOWED_TOOLS,
+    PLANNER_INSTRUCTION,
+)
 from cowork_core.agents.researcher import (
     RESEARCHER_DEFAULT_ALLOWED_TOOLS,
     RESEARCHER_INSTRUCTION,
@@ -30,6 +38,10 @@ from cowork_core.agents.researcher import (
 from cowork_core.agents.reviewer import (
     REVIEWER_DEFAULT_ALLOWED_TOOLS,
     REVIEWER_INSTRUCTION,
+)
+from cowork_core.agents.verifier import (
+    VERIFIER_DEFAULT_ALLOWED_TOOLS,
+    VERIFIER_INSTRUCTION,
 )
 from cowork_core.agents.writer import (
     WRITER_DEFAULT_ALLOWED_TOOLS,
@@ -78,15 +90,23 @@ Tool use:
   format-specific work.
 
 Sub-agent delegation:
-You have four specialist sub-agents. Delegate to them for complex tasks:
+You have seven specialist sub-agents. Delegate to them for complex tasks:
 - **researcher**: Gather information from the web or project files. Use for
   research-heavy requests before drafting.
 - **writer**: Draft or edit documents (memos, reports, emails, docx/xlsx).
 - **analyst**: Analyze data, run calculations, produce charts and tables.
-- **reviewer**: Review documents for quality, accuracy, and completeness.
+- **reviewer**: Review documents for style, tone, and completeness.
+- **explorer**: Read-only fast file/keyword navigator. Use for "where is X"
+  or "list every Y" queries — cheaper than running the main model.
+- **planner**: Read-only plan author. Use when the user asks "what would
+  you do" or in plan mode; planner writes a step-by-step plan to
+  `scratch/plan.md` without executing.
+- **verifier**: Adversarial correctness checker. Use after a writer or
+  analyst delivers — verifier opens the artifact, recomputes formulas,
+  validates schemas, and returns PASS/FAIL/PARTIAL.
 
 For simple requests (read a file, quick answer), handle them yourself.
-For multi-step workflows (research → draft → review), delegate to the
+For multi-step workflows (research → draft → verify), delegate to the
 appropriate sub-agents in sequence.
 """
 
@@ -115,6 +135,10 @@ SUB_AGENT_DEFAULTS: dict[str, tuple[tuple[str, ...], str]] = {
     "writer": (WRITER_DEFAULT_ALLOWED_TOOLS, WRITER_INSTRUCTION),
     "analyst": (ANALYST_DEFAULT_ALLOWED_TOOLS, ANALYST_INSTRUCTION),
     "reviewer": (REVIEWER_DEFAULT_ALLOWED_TOOLS, REVIEWER_INSTRUCTION),
+    # W3 — three new built-ins on top of W1+W2's primitives.
+    "explorer": (EXPLORER_DEFAULT_ALLOWED_TOOLS, EXPLORER_INSTRUCTION),
+    "planner": (PLANNER_DEFAULT_ALLOWED_TOOLS, PLANNER_INSTRUCTION),
+    "verifier": (VERIFIER_DEFAULT_ALLOWED_TOOLS, VERIFIER_INSTRUCTION),
 }
 
 
