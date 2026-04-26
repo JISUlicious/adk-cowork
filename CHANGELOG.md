@@ -276,6 +276,36 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Server package split — Slice U0 (cowork-server-app + cowork-server-web) (2026-04-26)
+
+Architectural prep for decoupling app vs web releases. `cowork-server`
+becomes a shared base; two thin wrapper packages (`cowork-server-app`
+for single-user sidecar, `cowork-server-web` for multi-user hosted)
+each provide their own `create_app` + `__main__.py`. Future feature
+work for one deployment shape lands in its own package without
+bloating the other.
+
+The split is implemented via mode-based route filtering rather than
+physically relocating route bodies — `cowork_server.app.create_app`
+gains a `mode: Literal["all", "app", "web"] = "all"` parameter; the
+two new wrappers call it with `mode="app"` and `mode="web"`
+respectively, then `_filter_routes_by_mode` strips paths that don't
+belong (`/v1/local-files*` and `/v1/local-sessions*` from web,
+`/v1/projects*` from app). The default `mode="all"` keeps every
+existing test working unchanged.
+
+- add `packages/cowork-server-app/` — pyproject + `cowork_server_app` module exposing `create_app` (refuses non-empty `cfg.auth.keys`) and `__main__.py` (sidecar entry point with handshake line)
+- add `packages/cowork-server-web/` — pyproject + `cowork_server_web` module exposing `create_app` (refuses empty `cfg.auth.keys`) and `__main__.py` (hosted entry point requiring COWORK_CONFIG_PATH)
+- update `packages/cowork-server/src/cowork_server/app.py` — `create_app` accepts `mode` param; new `_filter_routes_by_mode` helper strips routes after registration; module docstring updated to reflect the shared-base role
+- update `packages/cowork-cli/src/cowork_cli/main.py` — spawn target switches from `python -m cowork_server` to `python -m cowork_server_app`
+- update `packages/cowork-app/src-tauri/src/sidecar.rs` — Tauri sidecar spawns `cowork_server_app`
+- update `scripts/bundle_python.py` — desktop bundle installs `cowork-server-app` alongside core/server; verify probe imports from `cowork_server_app`; comment notes that `cowork-server-web` is not bundled (hosted-only)
+- update root `pyproject.toml` — register both new packages as workspace members + dependencies + uv sources; mypy_path includes both new src dirs
+- add `tests/test_server_split.py` — 6 new tests pinning the U0 invariants: app backend filters managed-projects routes, web backend filters local-dir routes, app refuses MU config, web refuses empty keys, shared `mode="all"` keeps all routes (back-compat), shared `mode="web"` requires keys
+- 311 total tests green (was 305, +6 — no behaviour change in existing 305)
+
+Tier F left in place from earlier slices (per-user model overrides, live runtime reload, frontend split). U1 next: operator gate + DB-backed workspace settings landing inside `cowork-server-web` only.
+
 ### Settings UI — Slice T2 (Profile + System editors + Memory tab) (2026-04-26)
 
 User-visible payoff for T1's backend. The Settings overlay grows

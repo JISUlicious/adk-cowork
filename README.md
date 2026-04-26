@@ -242,6 +242,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Memory: LLM-Wiki pattern (4 tools, schema-as-config, two scopes) on top of storage | Core | wired | S2 |
 | Settings: edit model + compaction + profile + memory in-app (backend routes) | Server | wired | T1 |
 | Settings UI: editable Profile + System + new Memory tab | Settings | wired | T2 |
+| Server split: cowork-server (shared) + -app (single-user sidecar) + -web (multi-user hosted) | Packages | wired | U0 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

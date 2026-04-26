@@ -6,7 +6,9 @@ Produces a relocatable Python bundle under:
 
 The bundle includes:
   - CPython 3.12 standalone interpreter
-  - cowork-core + cowork-server installed into its site-packages
+  - cowork-core + cowork-server + cowork-server-app installed into
+    its site-packages (cowork-server-web is hosted-only and NOT
+    bundled — the desktop sidecar is single-user-only)
   - All runtime dependencies (FastAPI, uvicorn, google-adk, etc.)
 
 Usage:
@@ -15,7 +17,7 @@ Usage:
     uv run python scripts/bundle_python.py --clean
 
 After bundling, verify with:
-    .../python/<triple>/bin/python -m cowork_server --help
+    .../python/<triple>/bin/python -m cowork_server_app --help
 """
 
 from __future__ import annotations
@@ -110,16 +112,24 @@ def install_cowork(bundle_root: Path, triple: str, editable: bool = False) -> No
         check=True,
     )
 
-    # Install the two workspace packages from source. Order matters: core first.
+    # Install the workspace packages from source. Order matters: core first.
     # In editable mode (dev), source edits apply without re-bundling; do NOT
     # use for release builds since editable installs pin a host-local path.
+    # The bundled sidecar uses cowork-server-app (single-user backend), which
+    # depends on cowork-server (shared base). cowork-server-web is NOT
+    # bundled — it's the hosted multi-user backend, deployed separately.
     cmd = [str(py), "-m", "pip", "install", "--no-cache-dir"]
+    pkgs = [
+        "cowork-core",
+        "cowork-server",
+        "cowork-server-app",
+    ]
     if editable:
-        cmd += ["-e", str(REPO_ROOT / "packages" / "cowork-core"),
-                "-e", str(REPO_ROOT / "packages" / "cowork-server")]
+        for pkg in pkgs:
+            cmd += ["-e", str(REPO_ROOT / "packages" / pkg)]
     else:
-        cmd += [str(REPO_ROOT / "packages" / "cowork-core"),
-                str(REPO_ROOT / "packages" / "cowork-server")]
+        for pkg in pkgs:
+            cmd.append(str(REPO_ROOT / "packages" / pkg))
     subprocess.run(cmd, check=True)
 
 
@@ -127,8 +137,11 @@ def verify(bundle_root: Path, triple: str) -> None:
     py = python_executable(bundle_root, triple)
     if not py.exists():
         py = bundle_root / "bin" / "python"
-    # `python -m cowork_server` starts uvicorn and blocks — use an import probe instead.
-    probe = "from cowork_server.app import create_app; from cowork_core import CoworkConfig; print('ok')"
+    # `python -m cowork_server_app` starts uvicorn and blocks — use an import probe instead.
+    probe = (
+        "from cowork_server_app import create_app; "
+        "from cowork_core import CoworkConfig; print('ok')"
+    )
     print(f"[verify] {py} -c <import probe>")
     subprocess.run([str(py), "-c", probe], check=True)
 

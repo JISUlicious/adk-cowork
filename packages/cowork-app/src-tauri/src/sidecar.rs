@@ -146,7 +146,7 @@ pub fn spawn(app: &AppHandle) -> Result<ServerInfo, String> {
     let python = python_binary(app)?;
     let mut cmd = Command::new(&python);
     cmd.arg("-m")
-        .arg("cowork_server")
+        .arg("cowork_server_app")
         .env("COWORK_PORT", "0")
         .env("COWORK_WATCH_PARENT", "1")
         .env("PYTHONUNBUFFERED", "1")

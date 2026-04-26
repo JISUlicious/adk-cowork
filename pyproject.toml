@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "cowork-core",
     "cowork-server",
+    "cowork-server-app",
+    "cowork-server-web",
     "cowork-cli",
     "python-dotenv>=1.2.2",
 ]
@@ -30,6 +32,8 @@ exclude = ["packages/cowork-web", "packages/cowork-app"]
 [tool.uv.sources]
 cowork-core = { workspace = true }
 cowork-server = { workspace = true }
+cowork-server-app = { workspace = true }
+cowork-server-web = { workspace = true }
 cowork-cli = { workspace = true }
 
 [tool.ruff]
@@ -56,7 +60,7 @@ disallow_untyped_defs = true
 no_implicit_optional = true
 check_untyped_defs = true
 explicit_package_bases = true
-mypy_path = "packages/cowork-core/src:packages/cowork-server/src:packages/cowork-cli/src"
+mypy_path = "packages/cowork-core/src:packages/cowork-server/src:packages/cowork-server-app/src:packages/cowork-server-web/src:packages/cowork-cli/src"
 exclude = "packages/cowork-app|packages/cowork-web|\\.cache"
 
 [tool.pytest.ini_options]

@@ -49,7 +49,7 @@ def main(ctx: typer.Context) -> None:
 def _spawn_server() -> tuple[subprocess.Popen[str], str, str]:
     env = {**os.environ}
     proc = subprocess.Popen(
-        [sys.executable, "-m", "cowork_server"],
+        [sys.executable, "-m", "cowork_server_app"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

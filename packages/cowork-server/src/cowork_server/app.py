@@ -1,4 +1,4 @@
-"""FastAPI application factory for ``cowork-server``.
+"""FastAPI application factory for ``cowork-server`` (the shared base).
 
 All shared state is behind abstract protocols (EventBus, AuthGuard,
 ConnectionLimiter) so backends can be swapped without touching routes.
@@ -9,6 +9,23 @@ groups used by the UI panes documented in ``ARCHITECTURE.md §2``;
 auth uses an ``x-cowork-token`` header advertised as the
 ``cowork-token`` security scheme so Swagger's Authorize button
 unlocks "Try it out".
+
+**Slice U0 — server split.** ``create_app`` accepts a ``mode``
+parameter discriminating which route sets to register:
+
+* ``"all"`` (default, back-compat) — every route, regardless of
+  deployment shape. Keeps existing tests + CLI sidecar contract
+  untouched.
+* ``"app"`` — single-user backend (cowork-server-app). Common
+  routes + local-dir browsing + SU config edits. No managed-project
+  or managed-files routes.
+* ``"web"`` — multi-user backend (cowork-server-web). Common routes
+  + managed projects + managed files + MU config (operator-gated;
+  filled in by U1). No local-dir browsing.
+
+The two new backends — ``cowork_server_app`` and
+``cowork_server_web`` — wrap this factory with the appropriate
+mode, hiding the discrimination from their public ``create_app``.
 """
 
 from __future__ import annotations
@@ -17,7 +34,7 @@ import asyncio
 import time
 from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
-from typing import Any
+from typing import Any, Literal
 
 from cowork_core import CoworkConfig, CoworkRuntime, PreviewCache, build_runtime
 from cowork_core.config import McpServerConfig
@@ -145,13 +162,36 @@ _api_key_scheme = APIKeyHeader(
 )
 
 
+CreateAppMode = Literal["all", "app", "web"]
+
+
 def create_app(
     cfg: CoworkConfig | None = None,
     token: str | None = None,
     config_path: Path | None = None,
+    mode: CreateAppMode = "all",
 ) -> FastAPI:
+    """Build the FastAPI app.
+
+    ``mode`` controls which route sets are registered:
+
+    * ``"all"`` (default) — every route, back-compat with pre-U0
+      tests + sidecar contract.
+    * ``"app"`` — common routes + local-dir browsing + SU config
+      edits. No managed projects/files. Used by cowork-server-app.
+    * ``"web"`` — common routes + managed projects + managed files +
+      MU config edits. No local-dir browsing. Used by
+      cowork-server-web; refuses to start with empty
+      ``cfg.auth.keys``.
+    """
     cfg = cfg or CoworkConfig()
     token = token or cfg.auth.token or generate_token()
+    if mode == "web" and not cfg.auth.keys:
+        raise ValueError(
+            "mode='web' requires non-empty cfg.auth.keys; "
+            "the multi-user backend won't start without API keys "
+            "configured. Set [auth].keys in cowork.toml.",
+        )
     guard = create_guard(token, cfg.auth.keys or None)
     runtime: CoworkRuntime = build_runtime(cfg, config_path=config_path)
 
@@ -1361,7 +1401,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="session not found")
         return events_to_history(getattr(existing, "events", []) or [])
 
-    # ── Local-dir file browser (desktop surface) ───────────────────────
+    # ── Local-dir file browser + sessions (desktop surface; SU only) ─
 
     @app.get(
         "/v1/local-files",
@@ -1849,7 +1889,54 @@ def create_app(
             headers={"X-Content-Hash": result.content_hash},
         )
 
+    # ── Slice U0 — filter routes by deployment mode ───────────────────
+    #
+    # Each backend's create_app calls into this shared function with a
+    # mode discriminator. We register everything above, then strip the
+    # routes that don't belong in the requested deployment shape.
+    # Filtering after registration keeps the route bodies clean (no
+    # mode-conditional indentation), and future MU-only routes added
+    # by cowork-server-web's app_factory after this returns won't be
+    # affected by the filter.
+    if mode != "all":
+        _filter_routes_by_mode(app, mode)
+
     return app
+
+
+_SU_ONLY_PATH_PREFIXES = (
+    "/v1/local-files",
+    "/v1/local-sessions",
+)
+_MU_ONLY_PATH_PREFIXES = (
+    "/v1/projects",
+)
+
+
+def _filter_routes_by_mode(app: FastAPI, mode: CreateAppMode) -> None:
+    """Strip routes that don't belong in the requested deployment mode.
+
+    ``mode == "app"`` removes managed-projects + managed-files routes
+    (everything under ``/v1/projects/...``).
+    ``mode == "web"`` removes local-dir routes
+    (``/v1/local-files``, ``/v1/local-sessions``).
+
+    The OpenAPI schema is regenerated automatically on the next
+    ``/openapi.json`` request — FastAPI memoises it via
+    ``app.openapi_schema``, which we clear here so the filtered
+    surface is reflected.
+    """
+    keep = []
+    for route in app.router.routes:
+        path = getattr(route, "path", "")
+        if mode == "app" and any(path.startswith(p) for p in _MU_ONLY_PATH_PREFIXES):
+            continue
+        if mode == "web" and any(path.startswith(p) for p in _SU_ONLY_PATH_PREFIXES):
+            continue
+        keep.append(route)
+    app.router.routes = keep
+    # Force OpenAPI schema regeneration on next access.
+    app.openapi_schema = None
 
 
 _SERVER_AUTHOR = "cowork-server"

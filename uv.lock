@@ -18,6 +18,8 @@ members = [
     "cowork-cli",
     "cowork-core",
     "cowork-server",
+    "cowork-server-app",
+    "cowork-server-web",
     "cowork-workspace",
 ]
 
@@ -531,6 +533,44 @@ requires-dist = [
 ]
 
 [[package]]
+name = "cowork-server-app"
+version = "0.1.0"
+source = { editable = "packages/cowork-server-app" }
+dependencies = [
+    { name = "cowork-core" },
+    { name = "cowork-server" },
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cowork-core", editable = "packages/cowork-core" },
+    { name = "cowork-server", editable = "packages/cowork-server" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "uvicorn", specifier = ">=0.32" },
+]
+
+[[package]]
+name = "cowork-server-web"
+version = "0.1.0"
+source = { editable = "packages/cowork-server-web" }
+dependencies = [
+    { name = "cowork-core" },
+    { name = "cowork-server" },
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cowork-core", editable = "packages/cowork-core" },
+    { name = "cowork-server", editable = "packages/cowork-server" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "uvicorn", specifier = ">=0.32" },
+]
+
+[[package]]
 name = "cowork-workspace"
 version = "0.1.0"
 source = { virtual = "." }
@@ -538,6 +578,8 @@ dependencies = [
     { name = "cowork-cli" },
     { name = "cowork-core" },
     { name = "cowork-server" },
+    { name = "cowork-server-app" },
+    { name = "cowork-server-web" },
     { name = "python-dotenv" },
 ]
 
@@ -556,6 +598,8 @@ requires-dist = [
     { name = "cowork-cli", editable = "packages/cowork-cli" },
     { name = "cowork-core", editable = "packages/cowork-core" },
     { name = "cowork-server", editable = "packages/cowork-server" },
+    { name = "cowork-server-app", editable = "packages/cowork-server-app" },
+    { name = "cowork-server-web", editable = "packages/cowork-server-web" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
 ]
 
