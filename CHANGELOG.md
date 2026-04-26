@@ -276,6 +276,33 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Audit log — Slice V1 (full hooks-based + per-tool capture policy) (2026-04-26)
+
+Every tool call + workspace-settings change lands as a structured row
+in a SQLite audit DB. Per-tool capture policy filters args + result so
+file content, email bodies, memory pages, search results etc. don't
+leak in unless the operator explicitly opts in. Tighter than initial
+plan: summary capture is restricted to a fixed allowlist of indicator
+keys (no arbitrary repr) — caught a real leak path during testing
+where small payloads slipped through the truncate-256 cap.
+
+- add `packages/cowork-core/src/cowork_core/audit_policy.py` — `ToolAuditPolicy` dataclass + `TOOL_AUDIT_POLICIES` dispatch table covering 17 tools (fs.* / shell / python_exec / http / search / email / load_skill / memory.*); unknown tools fall back to `DEFAULT_POLICY` (log only ok/error)
+- add `packages/cowork-core/src/cowork_core/audit.py` — `AuditSink` Protocol + `SqliteAuditSink` (own connection, R1 isolation pattern) + `NullAuditSink` (test/default) + `serialize_args` + `serialize_result` helpers; `audit_log` table schema indexed on ts/user/session/tool
+- update `packages/cowork-core/src/cowork_core/runner.py` — `runtime.audit_sink` field built early in `build_runtime` (SU = `<workspace>/audit.db`, MU = `audit_log` table inside `multiuser.db`); threaded into `_build_context` so every `CoworkToolContext` carries the sink
+- update `packages/cowork-core/src/cowork_core/tools/base.py` — `CoworkToolContext.audit_sink: AuditSink | None = None` (default keeps test fixtures simple; runtime always wires real sink)
+- update `packages/cowork-core/src/cowork_core/policy/hooks.py` — audit callbacks write structured rows via the sink in addition to the existing transcript JSONL; `tool_call` row pre-invocation, `tool_result` row post-invocation with duration_ms
+- update `packages/cowork-server/src/cowork_server/api_models.py` — `AuditEntry` + `AuditQueryResponse` Pydantic models
+- update `packages/cowork-server/src/cowork_server/app.py`:
+  - new `audit` OpenAPI tag
+  - new `GET /v1/audit?user_id=&session_id=&tool_name=&since_ts=&limit=` route, operator-only in MU (403 for non-operators), open in SU. Filters AND'd, newest-first, limit hard-capped server-side at 1000
+  - `_log_settings_change` (U1) now records a `kind="settings_change"` audit row in addition to the stdout breadcrumb — replaces the half-audit-trail with the real one
+- update `packages/cowork-web/src/transport/types.ts` — `AuditEntry` + `AuditQueryResponse` types
+- update `packages/cowork-web/src/transport/client.ts` — `queryAudit({user_id?, session_id?, tool_name?, since_ts?, limit?})` method
+- update `packages/cowork-web/src/components/Settings.tsx` — new `<SecAuditLog>` component under Settings → System; collapsible "view" affordance shows a 50-row table with ts/user/kind/tool/ms/error columns; non-operators see the row disabled in MU mode (mirrors the route gate)
+- add `tests/test_audit.py` — 23 new tests: policy table sanity (no tool defaults to "full"), policy_for fallback, args whitelist + truncation + missing-key drop, result capture none/summary/full kinds + indicator-only allowlist (no arbitrary content leak), SqliteAuditSink round-trip + filter-AND + limit cap + error swallow, NullAuditSink no-op, hook callbacks record both rows, build_runtime creates sink in SU + MU, /v1/audit route returns settings_change rows, /v1/audit 403s non-operators in MU, /v1/audit query filters
+- update `tests/test_openapi.py` — expected tag set includes "audit"
+- 358 total tests green (was 335, +23)
+
 ### Multi-user workspace settings — Slice U1 (operator gate + DB-backed config) (2026-04-26)
 
 Lifts T1's blanket 403 on multi-user PUT routes. Workspace-wide

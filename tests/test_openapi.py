@@ -48,7 +48,7 @@ def test_openapi_metadata_populated(tmp_path: Path) -> None:
     expected = {
         "health", "sessions", "policy", "approvals", "notifications",
         "search", "projects", "files", "local-dir", "streams", "skills",
-        "mcp", "config", "profile", "memory",
+        "mcp", "config", "profile", "memory", "audit",
     }
     assert tag_names == expected, f"missing or extra tags: {tag_names ^ expected}"
 

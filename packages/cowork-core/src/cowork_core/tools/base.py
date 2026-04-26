@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from google.adk.tools.tool_context import ToolContext
 
     from cowork_core.approvals import ApprovalStore
+    from cowork_core.audit import AuditSink
     from cowork_core.config import CoworkConfig
     from cowork_core.execenv import ExecEnv
     from cowork_core.skills.loader import SkillRegistry
@@ -83,6 +84,12 @@ class CoworkToolContext:
     # ``UserStore`` and ``ProjectStore`` calls. Defaults to ``"local"``
     # so existing test fixtures don't need updating.
     user_id: str = "local"
+    # Slice V1 — audit sink. Tools don't call this directly; the
+    # ``before_tool_callback`` / ``after_tool_callback`` audit hooks
+    # in ``cowork_core.policy.hooks`` read this off the context to
+    # record structured rows. Defaults to ``None`` so existing test
+    # fixtures still work; the runtime always wires a real sink.
+    audit_sink: "AuditSink | None" = None
 
 
 def get_cowork_context(tool_context: ToolContext) -> CoworkToolContext:

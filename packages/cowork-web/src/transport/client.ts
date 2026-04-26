@@ -10,6 +10,7 @@ import type {
   AddMcpServerRequest,
   AddMcpServerResponse,
   AdkEvent,
+  AuditQueryResponse,
   ConfigCompactionPatch,
   ConfigCompactionView,
   ConfigModelPatch,
@@ -502,6 +503,34 @@ export class CoworkClient {
       headers: this.jsonHeaders(),
     });
     if (!r.ok) throw new Error(`getEffectiveConfig: ${r.status}`);
+    return r.json();
+  }
+
+  /** Slice V1 — query the audit log. Multi-user mode: 403s for
+   *  non-operators. All filters are AND'd; ``limit`` capped at
+   *  1000 server-side. */
+  async queryAudit(opts?: {
+    user_id?: string;
+    session_id?: string;
+    tool_name?: string;
+    since_ts?: string;
+    limit?: number;
+  }): Promise<AuditQueryResponse> {
+    const qs = new URLSearchParams();
+    if (opts?.user_id) qs.set("user_id", opts.user_id);
+    if (opts?.session_id) qs.set("session_id", opts.session_id);
+    if (opts?.tool_name) qs.set("tool_name", opts.tool_name);
+    if (opts?.since_ts) qs.set("since_ts", opts.since_ts);
+    if (opts?.limit) qs.set("limit", String(opts.limit));
+    const q = qs.toString();
+    const r = await fetch(
+      `${this.baseUrl}/v1/audit${q ? "?" + q : ""}`,
+      { headers: this.jsonHeaders() },
+    );
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`queryAudit: ${r.status} — ${detail}`);
+    }
     return r.json();
   }
 

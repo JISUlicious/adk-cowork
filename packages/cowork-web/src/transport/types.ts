@@ -196,6 +196,30 @@ export interface EffectiveConfig {
   source: Record<string, "db" | "toml" | string>;
 }
 
+/** Slice V1 — one row from ``GET /v1/audit``. Settings → System
+ *  surfaces a compact tail (latest N entries) so the operator can
+ *  see at a glance what the agent has been doing.
+ *
+ *  ``args_json`` and ``result_json`` are JSON-serialized strings
+ *  (not parsed objects) — the per-tool capture policy chose what
+ *  fields to include; the UI renders them as raw mono text. */
+export interface AuditEntry {
+  ts: string;
+  user_id: string;
+  kind: string;
+  tool_name: string;
+  session_id?: string | null;
+  project_id?: string | null;
+  args_json?: string | null;
+  result_json?: string | null;
+  error_text?: string | null;
+  duration_ms?: number | null;
+}
+
+export interface AuditQueryResponse {
+  entries: AuditEntry[];
+}
+
 /* ───────── Settings UI editors (Slice T1/T2) ───────── */
 
 /** Body for ``PUT /v1/config/model``. ``null`` / missing fields are

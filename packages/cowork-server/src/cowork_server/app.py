@@ -94,6 +94,8 @@ from cowork_server.api_models import (
     SendMessageRequest,
     SessionInfo,
     SessionListItem,
+    AuditEntry as ApiAuditEntry,
+    AuditQueryResponse,
     ConfigCompactionPatch,
     ConfigCompactionView,
     ConfigModelPatch,
@@ -145,6 +147,7 @@ _OPENAPI_TAGS: list[dict[str, str]] = [
     {"name": "config", "description": "Workspace-wide config edits — model + compaction (single-user only)."},
     {"name": "profile", "description": "Per-user profile (display name + email)."},
     {"name": "memory", "description": "Per-scope memory page management (list / read / delete)."},
+    {"name": "audit", "description": "Audit log — every tool call + settings change (operator-only in MU)."},
 ]
 
 
@@ -993,16 +996,43 @@ def create_app(
         return runtime.workspace_settings_store
 
     def _log_settings_change(section: str, patch: dict[str, Any], user: UserIdentity) -> None:
-        """R5 — log every workspace-settings PUT with the destination
-        and operator label so operators tailing logs can answer
-        'where did my edit go'."""
+        """R5 — record every workspace-settings PUT in two places so
+        operators can answer 'where did my edit go':
+
+        1. **Audit row** (V1) — structured row in the audit DB with
+           ``kind="settings_change"`` and ``tool_name="config.<section>"``.
+           Queryable via ``GET /v1/audit``.
+        2. **Stdout breadcrumb** — short ``[settings] ... → <destination>``
+           line for log-tailers; redundant with the audit row but
+           cheap and zero-config to read.
+        """
+        import json as _json
+        from datetime import UTC as _UTC, datetime as _datetime
+
+        from cowork_core.audit import AuditEntry as _AuditEntry
+
         keys = ", ".join(f"{section}.{k}" for k in patch)
         destination = "multiuser.db" if runtime.multi_user else "cowork.toml"
+        # Stdout breadcrumb (kept for log-tailers; will move to a
+        # structured logger in V4c).
         print(
             f"[settings] {keys} updated → {destination} "
             f"(operator={user.label})",
             flush=True,
         )
+        # Structured audit row.
+        try:
+            args_json = _json.dumps({"section": section, "keys": list(patch.keys())})
+        except (TypeError, ValueError):
+            args_json = None
+        runtime.audit_sink.record(_AuditEntry(
+            ts=_datetime.now(_UTC).isoformat(),
+            user_id=user.user_id,
+            kind="settings_change",
+            tool_name=f"config.{section}",
+            args_json=args_json,
+            result_json=_json.dumps({"destination": destination}),
+        ))
 
     @app.put(
         "/v1/config/model",
@@ -1134,6 +1164,63 @@ def create_app(
                 "event_retention_size": cfg.compaction.event_retention_size,
             },
             "source": sources,
+        }
+
+    # ── Audit log (Slice V1) ───────────────────────────────────────────
+
+    @app.get(
+        "/v1/audit",
+        tags=["audit"],
+        summary="Query the audit log (operator-only in MU)",
+        response_model=AuditQueryResponse,
+    )
+    async def query_audit(
+        user_id: str | None = None,
+        session_id: str | None = None,
+        tool_name: str | None = None,
+        since_ts: str | None = None,
+        limit: int = 100,
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Query the audit log. Multi-user mode: operator-only —
+        the audit covers every authenticated user's activity, so
+        access is gated to prevent one user from snooping on
+        another. Single-user mode: open (the local user audits
+        their own activity).
+
+        Filters are AND'd. ``limit`` is capped at 1000 server-side.
+        Newest-first ordering by ``ts``.
+        """
+        from cowork_server.auth import is_operator
+
+        if runtime.multi_user and not is_operator(cfg, user):
+            raise HTTPException(
+                status_code=403,
+                detail="audit log is operator-only in multi-user mode",
+            )
+        entries = runtime.audit_sink.query(
+            user_id=user_id,
+            session_id=session_id,
+            tool_name=tool_name,
+            since_ts=since_ts,
+            limit=limit,
+        )
+        return {
+            "entries": [
+                {
+                    "ts": e.ts,
+                    "user_id": e.user_id,
+                    "kind": e.kind,
+                    "tool_name": e.tool_name,
+                    "session_id": e.session_id,
+                    "project_id": e.project_id,
+                    "args_json": e.args_json,
+                    "result_json": e.result_json,
+                    "error_text": e.error_text,
+                    "duration_ms": e.duration_ms,
+                }
+                for e in entries
+            ],
         }
 
     # ── Per-user profile (Slice T1) ────────────────────────────────────

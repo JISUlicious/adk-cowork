@@ -1802,9 +1802,162 @@ function SecSystem({ client }: { client: CoworkClient }) {
           local in-memory (event bus · limiter · sessions)
         </span>
       </Field>
+      <SecAuditLog client={client} health={health} />
     </div>
   );
 }
+
+/** Slice V1 — collapsible audit log tail under Settings → System.
+ *  In MU mode the route 403s for non-operators; we mirror that gate
+ *  in the UI by only rendering the affordance when ``is_operator``
+ *  is true. */
+function SecAuditLog({
+  client,
+  health,
+}: {
+  client: CoworkClient;
+  health: HealthInfo | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [entries, setEntries] = useState<
+    import("../transport/types").AuditEntry[] | null
+  >(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const isOperator = health?.is_operator === true;
+
+  const refresh = () => {
+    setError(null);
+    client
+      .queryAudit({ limit: 50 })
+      .then((r) => setEntries(r.entries))
+      .catch((e) => setError(String(e)));
+  };
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && entries === null) refresh();
+  };
+
+  if (!isOperator) {
+    // Non-operator in MU sees the row at all but disabled — mirrors
+    // the editor gate so the absence isn't mysterious.
+    return (
+      <Field
+        label="Audit log"
+        sub="Operator-only in multi-user mode."
+      >
+        <span style={{ fontFamily: "var(--mono)", fontSize: "var(--fs-sm)", color: "var(--ink-4)" }}>
+          —
+        </span>
+      </Field>
+    );
+  }
+
+  return (
+    <>
+      <Field
+        label="Audit log"
+        sub="Every tool call + workspace settings change is recorded. Latest 50."
+      >
+        <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={toggle}
+            style={editorBtnStyle(false)}
+          >
+            {open ? "hide" : "view"}
+          </button>
+          {open && (
+            <button
+              type="button"
+              onClick={refresh}
+              style={editorBtnStyle(false)}
+              title="Refresh"
+            >
+              ↻
+            </button>
+          )}
+        </span>
+      </Field>
+      {open && (
+        <div
+          style={{
+            background: "var(--paper-2)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-sm)",
+            padding: 8,
+            margin: "4px 0 12px 0",
+            maxHeight: 400,
+            overflow: "auto",
+          }}
+        >
+          {error && (
+            <div style={{ fontSize: "var(--fs-xs)", color: "var(--danger)" }}>
+              {error}
+            </div>
+          )}
+          {entries === null ? (
+            <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>
+              Loading…
+            </div>
+          ) : entries.length === 0 ? (
+            <div style={{ fontSize: "var(--fs-sm)", color: "var(--ink-3)" }}>
+              No audit entries yet — run a tool or change a setting.
+            </div>
+          ) : (
+            <table
+              style={{
+                width: "100%",
+                fontSize: 11,
+                fontFamily: "var(--mono)",
+                borderCollapse: "collapse",
+              }}
+            >
+              <thead>
+                <tr style={{ color: "var(--ink-3)" }}>
+                  <th style={auditCellStyle}>ts</th>
+                  <th style={auditCellStyle}>user</th>
+                  <th style={auditCellStyle}>kind</th>
+                  <th style={auditCellStyle}>tool</th>
+                  <th style={auditCellStyle}>ms</th>
+                  <th style={auditCellStyle}>err</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((e, i) => (
+                  <tr key={i} title={e.args_json || e.result_json || ""}>
+                    <td style={auditCellStyle}>{e.ts.slice(11, 19)}</td>
+                    <td style={auditCellStyle}>{e.user_id}</td>
+                    <td style={auditCellStyle}>{e.kind}</td>
+                    <td style={auditCellStyle}>{e.tool_name}</td>
+                    <td style={auditCellStyle}>{e.duration_ms ?? ""}</td>
+                    <td
+                      style={{
+                        ...auditCellStyle,
+                        color: e.error_text ? "var(--danger)" : "var(--ink-4)",
+                      }}
+                    >
+                      {e.error_text ? "✗" : ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+const auditCellStyle: React.CSSProperties = {
+  textAlign: "left",
+  padding: "2px 6px",
+  borderBottom: "1px solid var(--line)",
+  whiteSpace: "nowrap",
+};
 
 /* ───────── Settings → System sub-blocks (Slice T2) ───────── */
 

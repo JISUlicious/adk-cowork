@@ -523,6 +523,37 @@ class ConfigCompactionView(BaseModel):
     event_retention_size: int
 
 
+class AuditEntry(BaseModel):
+    """One row from ``GET /v1/audit`` (Slice V1).
+
+    ``kind`` discriminates the event:
+    * ``"tool_call"`` — pre-invocation; ``args_json`` holds the
+      whitelisted args per the per-tool policy.
+    * ``"tool_result"`` — post-invocation; ``result_json`` +
+      ``error_text`` + ``duration_ms`` populated.
+    * ``"settings_change"`` — operator-edited workspace settings
+      (replaces U1's ``[settings]`` print line).
+    """
+
+    ts: str
+    user_id: str
+    kind: str
+    tool_name: str
+    session_id: str | None = None
+    project_id: str | None = None
+    args_json: str | None = None
+    result_json: str | None = None
+    error_text: str | None = None
+    duration_ms: int | None = None
+
+
+class AuditQueryResponse(BaseModel):
+    """Returned by ``GET /v1/audit?...``. Newest-first; capped at
+    1000 rows per request."""
+
+    entries: list[AuditEntry]
+
+
 class EffectiveConfig(BaseModel):
     """Returned by ``GET /v1/config/effective`` (Slice U1).
 

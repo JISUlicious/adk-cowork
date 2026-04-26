@@ -22,6 +22,12 @@ from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.runners import Runner
 
 from cowork_core.agents.root_agent import build_mcp_toolset, build_root_agent
+from cowork_core.audit import (
+    AuditSink,
+    NullAuditSink,
+    SqliteAuditSink,
+    open_audit_db,
+)
 from cowork_core.model.openai_compat import build_model
 from cowork_core.approvals import (
     ApprovalStore,
@@ -196,6 +202,13 @@ class CoworkRuntime:
     # store; in MU it sits at ``<workspace>/multiuser.db`` keyed by
     # dotted setting names (``model.base_url``, etc.).
     workspace_settings_store: WorkspaceSettingsStore | None = None
+    # Slice V1 — audit sink. SU: SQLite at ``<workspace>/audit.db``;
+    # MU: ``audit_log`` table inside the existing ``multiuser.db``.
+    # Wired into ``make_audit_callbacks`` so every tool call lands as
+    # a structured row. Per-tool capture policy lives in
+    # ``cowork_core.audit_policy``. ``NullAuditSink`` default for
+    # contexts that haven't built a real one yet.
+    audit_sink: AuditSink = field(default_factory=NullAuditSink)
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -272,6 +285,7 @@ class CoworkRuntime:
             user_store=self.user_store,
             project_store=self.project_store,
             user_id=user_id,
+            audit_sink=self.audit_sink,
         )
 
     def _materialize_local_session(
@@ -1378,6 +1392,18 @@ def build_runtime(
         )
     workspace = Workspace(root=cfg.workspace.root)
 
+    # Slice V1 — audit sink. SU: per-workspace audit.db. MU: shares
+    # multiuser.db with the user/project/workspace_settings stores
+    # (its own connection — same pattern as those stores). The sink
+    # is built before anything else mutates state so all subsequent
+    # work has a non-null sink to record into.
+    workspace.root.mkdir(parents=True, exist_ok=True)
+    if cfg.auth.keys:
+        audit_db_path = workspace.root / "multiuser.db"
+    else:
+        audit_db_path = workspace.root / "audit.db"
+    audit_sink: AuditSink = SqliteAuditSink(open_audit_db(audit_db_path))
+
     # Slice U1 — boot-time workspace-settings merge.
     # Build the workspace settings store FIRST (it needs only workspace +
     # config_path), pull any DB/TOML overrides, and merge them into cfg
@@ -1521,6 +1547,7 @@ def build_runtime(
         memory=memory,
         config_path=config_path,
         workspace_settings_store=workspace_settings_store,
+        audit_sink=audit_sink,
     )
 
 
