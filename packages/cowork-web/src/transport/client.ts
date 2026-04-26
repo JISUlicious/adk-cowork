@@ -506,6 +506,22 @@ export class CoworkClient {
     return r.json();
   }
 
+  /** Slice V2 — live runtime reload. Re-fetches workspace-settings
+   *  overrides, merges into cfg, rebuilds the model + agent + Runner.
+   *  Operator-gated in MU. In-flight turns terminate; UI confirms
+   *  before calling. */
+  async reloadRuntime(): Promise<{ status: string; model: string }> {
+    const r = await fetch(`${this.baseUrl}/v1/runtime/reload`, {
+      method: "POST",
+      headers: this.jsonHeaders(),
+    });
+    if (!r.ok) {
+      const detail = await r.text();
+      throw new Error(`reloadRuntime: ${r.status} — ${detail}`);
+    }
+    return r.json();
+  }
+
   /** Slice V1 — query the audit log. Multi-user mode: 403s for
    *  non-operators. All filters are AND'd; ``limit`` capped at
    *  1000 server-side. */

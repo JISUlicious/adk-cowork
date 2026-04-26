@@ -776,6 +776,98 @@ class CoworkRuntime:
         self.runner = new_runner
         self.mcp_status = new_status
 
+    async def reload(self) -> None:
+        """Slice V2 — full runtime reload. Re-fetches workspace-
+        settings overrides, merges into cfg, rebuilds the model + agent
+        + App + Runner in place. ``session_service`` is preserved so
+        existing sessions stay reachable.
+
+        Use case: operator edits model.base_url or compaction settings
+        via PUT /v1/config/{model,compaction}, then clicks "Reload now"
+        in Settings. Lifts the "restart required" UX from a manual
+        process restart to a single API call.
+
+        **In-flight turns terminate** — the LiteLlm client + ADK App
+        change underneath them. The route + UI confirm before calling.
+
+        Compared to ``restart_mcp``, this is the broader rebuild:
+        restart_mcp keeps the model + compaction config (only swaps
+        toolsets), reload swaps everything that depends on cfg.
+        """
+        # Re-fetch and merge workspace-settings overrides into cfg.
+        if self.workspace_settings_store is not None:
+            overrides = self.workspace_settings_store.get_overrides()
+            self.cfg = _merge_overrides(self.cfg, overrides)
+
+        # Rebuild MCP toolsets (same as restart_mcp).
+        agent_tools: list[Any] = list(self.tools.as_list())
+        effective = _effective_mcp_servers(self.cfg, self.workspace)
+        new_status: dict[str, MCPServerStatus] = {}
+        new_owner: dict[str, str] = {}
+        for name, mcp_cfg in effective.items():
+            toolset, error = build_mcp_toolset(mcp_cfg)
+            if toolset is not None:
+                agent_tools.append(toolset)
+                new_status[name] = MCPServerStatus(
+                    name=name, status="ok", transport=mcp_cfg.transport,
+                )
+                try:
+                    tools = await toolset.get_tools()
+                    for t in tools:
+                        new_owner[t.name] = name
+                    new_status[name].tool_count = len(tools)
+                except Exception:
+                    pass
+            else:
+                new_status[name] = MCPServerStatus(
+                    name=name, status="error",
+                    last_error=error, transport=mcp_cfg.transport,
+                )
+        # Mutate dict in place so the disable callback's captured
+        # reference still works after the reload.
+        self.mcp_tool_owner.clear()
+        self.mcp_tool_owner.update(new_owner)
+
+        # Rebuild agent against the merged cfg (so cfg.model is fresh).
+        new_agent = build_root_agent(
+            self.cfg,
+            tools=agent_tools,
+            skills_snippet=self.skills.injection_snippet(),
+            skills=self.skills,
+            mcp_tool_owner=self.mcp_tool_owner,
+            memory=self.memory,
+        )
+
+        # Rebuild Runner with fresh App + compaction config (so
+        # cfg.compaction is fresh). Mirrors the build_runtime branch.
+        if self.cfg.compaction.enabled:
+            summarizer = LlmEventSummarizer(llm=build_model(self.cfg.model))
+            compaction_config = EventsCompactionConfig(
+                summarizer=summarizer,
+                compaction_interval=self.cfg.compaction.compaction_interval,
+                overlap_size=self.cfg.compaction.overlap_size,
+                token_threshold=self.cfg.compaction.token_threshold,
+                event_retention_size=self.cfg.compaction.event_retention_size,
+            )
+            app = App(
+                name=APP_NAME,
+                root_agent=new_agent,
+                events_compaction_config=compaction_config,
+            )
+            new_runner = Runner(
+                app=app,
+                session_service=self.session_service,
+            )
+        else:
+            new_runner = Runner(
+                app_name=APP_NAME,
+                agent=new_agent,
+                session_service=self.session_service,
+            )
+
+        self.runner = new_runner
+        self.mcp_status = new_status
+
     async def delete_local_session(
         self,
         workdir: Path,

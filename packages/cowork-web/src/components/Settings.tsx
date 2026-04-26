@@ -328,6 +328,108 @@ function editorBtnStyle(disabled: boolean): React.CSSProperties {
   };
 }
 
+/** Slice V2 — banner shown after a workspace-settings PUT. The
+ *  "Reload now" button calls POST /v1/runtime/reload to apply the
+ *  edit live (rebuilds the agent + model + Runner). Falls back to
+ *  the old "restart later" flow if the reload itself errors. */
+function ReloadBanner({
+  client,
+  onDismiss,
+  onReloaded,
+}: {
+  client: CoworkClient;
+  onDismiss: () => void;
+  onReloaded: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const onReload = async () => {
+    if (
+      !window.confirm(
+        "Reload runtime now? In-flight turns will terminate.",
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await client.reloadRuntime();
+      setDone(true);
+      window.setTimeout(() => onReloaded(), 600);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const accent = done ? "var(--ok, #2a7)" : "var(--warn, #c80)";
+  return (
+    <div
+      style={{
+        background: "var(--paper-2)",
+        border: `1px solid ${accent}`,
+        color: accent,
+        padding: "6px 10px",
+        borderRadius: "var(--radius-sm)",
+        fontSize: "var(--fs-xs)",
+        marginBottom: 12,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <span>
+        {done
+          ? "✓ Reloaded — runtime is using the new config."
+          : error
+          ? `Reload failed: ${error}. Try restarting the server manually.`
+          : "Config saved. Reload the runtime to apply now, or restart the server later."}
+      </span>
+      {!done && (
+        <span style={{ display: "inline-flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => void onReload()}
+            disabled={busy}
+            style={{
+              background: "transparent",
+              border: `1px solid ${accent}`,
+              color: accent,
+              cursor: busy ? "wait" : "pointer",
+              fontSize: "var(--fs-xs)",
+              fontFamily: "var(--mono)",
+              padding: "2px 8px",
+              borderRadius: "var(--radius-sm)",
+            }}
+          >
+            {busy ? "reloading…" : "↻ Reload now"}
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            disabled={busy}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: accent,
+              cursor: busy ? "wait" : "pointer",
+              fontSize: "var(--fs-xs)",
+              textDecoration: "underline",
+            }}
+          >
+            Dismiss
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** Slice U1 — small mono badge next to each editable field
  *  indicating where its current value comes from
  *  (``"db"`` = DB-overridden via the workspace_settings table,
@@ -1686,40 +1788,15 @@ function SecSystem({ client }: { client: CoworkClient }) {
         protocols.
       </div>
       {restartBanner && (
-        <div
-          style={{
-            background: "var(--paper-2)",
-            border: "1px solid var(--warn, #c80)",
-            color: "var(--warn, #c80)",
-            padding: "6px 10px",
-            borderRadius: "var(--radius-sm)",
-            fontSize: "var(--fs-xs)",
-            marginBottom: 12,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 8,
+        <ReloadBanner
+          client={client}
+          onDismiss={() => setRestartBanner(false)}
+          onReloaded={() => {
+            setRestartBanner(false);
+            refreshHealth();
+            refreshEffective();
           }}
-        >
-          <span>
-            ⚠ Restart required — config edits take effect on next
-            server restart.
-          </span>
-          <button
-            type="button"
-            onClick={() => setRestartBanner(false)}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--warn, #c80)",
-              cursor: "pointer",
-              fontSize: "var(--fs-xs)",
-              textDecoration: "underline",
-            }}
-          >
-            Dismiss
-          </button>
-        </div>
+        />
       )}
       <SecConfigModel
         client={client}

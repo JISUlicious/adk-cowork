@@ -276,6 +276,42 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Live runtime reload — Slice V2 (POST /v1/runtime/reload) (2026-04-26)
+
+Lifts the "restart required" UX from "SSH in and restart the server"
+to a single API call. Operator saves a model + compaction edit in
+Settings → "Reload now" rebuilds the agent + LiteLlm client + ADK App
++ Runner in place; session_service is preserved so existing sessions
+stay reachable.
+
+Critical wiring detail: the route uses `nonlocal cfg; cfg = runtime.cfg`
+inside the create_app closure. Python closures are late-binding by
+name, so rebinding the name in the enclosing scope propagates to all
+route closures that close over it. Without this, the health route
+(and others) would keep reading the pre-reload cfg.
+
+- add `cowork_core/runner.py:CoworkRuntime.reload()` async method —
+  re-fetches workspace_settings_store overrides, merges into cfg via
+  the existing module-private `_merge_overrides`, rebuilds MCP
+  toolsets (matches restart_mcp's tool-discovery pass), rebuilds
+  agent + Runner with fresh cfg, mutates `mcp_tool_owner` in place
+  so the V6 disable callback's captured reference stays valid.
+- update `cowork_server/app.py` — new `POST /v1/runtime/reload` route
+  under the `config` tag; operator-gated in MU via `is_operator`;
+  rebinds `cfg` in the create_app scope after a successful reload.
+- update `cowork-web/transport/client.ts` — `reloadRuntime()` method.
+- update `cowork-web/components/Settings.tsx` — replace the static
+  "Restart required" banner with a `<ReloadBanner>` component that
+  offers a "↻ Reload now" button (with confirm + busy state +
+  green-tick on success) AND keeps the original Dismiss option for
+  the "save and restart later" path.
+- add `tests/test_runtime_reload.py` — 7 new tests: reload picks up
+  DB overrides for model + compaction, preserves session_service
+  across reload, no-op when no overrides, route open in SU, route
+  403s non-operators in MU, end-to-end PUT → reload → /v1/health
+  reflects new model (validates the closure-rebind fix).
+- 365 total tests green (was 358, +7)
+
 ### Audit log — Slice V1 (full hooks-based + per-tool capture policy) (2026-04-26)
 
 Every tool call + workspace-settings change lands as a structured row

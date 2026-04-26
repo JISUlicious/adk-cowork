@@ -1108,6 +1108,44 @@ def create_app(
             ),
         }
 
+    @app.post(
+        "/v1/runtime/reload",
+        tags=["config"],
+        summary="Live-reload the runtime (rebuilds model + agent + Runner)",
+    )
+    async def reload_runtime(
+        user: UserIdentity = Depends(guard),
+    ) -> dict[str, Any]:
+        """Slice V2 — re-fetch workspace-settings overrides, merge
+        into cfg, rebuild the agent + model + Runner in place. Used
+        by the Settings UI's "Reload now" button so the operator
+        doesn't need to SSH in and restart after a config save.
+
+        **In-flight turns terminate** when this fires — the LiteLlm
+        client + ADK App change underneath them. The UI confirms
+        before calling.
+
+        Multi-user mode: operator-only. Single-user mode: open (the
+        local user is the operator by definition).
+        """
+        nonlocal cfg
+        from cowork_server.auth import is_operator
+
+        if runtime.multi_user and not is_operator(cfg, user):
+            raise HTTPException(
+                status_code=403,
+                detail="runtime reload is operator-only in multi-user mode",
+            )
+        await runtime.reload()
+        # Re-bind ``cfg`` in the enclosing ``create_app`` scope so all
+        # other route closures see the merged values on their next
+        # call. Python closures are late-binding by name, so
+        # rebinding the name here propagates to every closure that
+        # closes over it. This is the V2 analog of the U1
+        # ``cfg = runtime.cfg`` post-build_runtime fix.
+        cfg = runtime.cfg
+        return {"status": "reloaded", "model": runtime.cfg.model.model}
+
     @app.get(
         "/v1/config/effective",
         tags=["config"],

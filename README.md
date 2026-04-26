@@ -245,6 +245,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Server split: cowork-server (shared) + -app (single-user sidecar) + -web (multi-user hosted) | Packages | wired | U0 |
 | Multi-user: operator gate + DB-backed workspace settings + (db)/(toml) source badges | Core / Server / Settings | wired | U1 |
 | Audit log: per-tool capture policy + SQLite sink + GET /v1/audit + Settings UI tail | Core / Server / Settings | wired | V1 |
+| Live runtime reload: POST /v1/runtime/reload + "Reload now" banner replaces restart-required UX | Core / Server / Settings | wired | V2 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |
