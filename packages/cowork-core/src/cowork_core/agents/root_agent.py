@@ -18,6 +18,7 @@ from google.adk.agents import LlmAgent
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.base_tool import BaseTool
 
+from cowork_core.agents.custom import CustomAgent, CustomAgentRegistry
 from cowork_core.agents.analyst import (
     ANALYST_DEFAULT_ALLOWED_TOOLS,
     ANALYST_INSTRUCTION,
@@ -285,6 +286,7 @@ def build_root_agent(
     skills: Any = None,
     mcp_tool_owner: dict[str, str] | None = None,
     memory: Any = None,
+    custom_agents: CustomAgentRegistry | None = None,
 ) -> LlmAgent:
     # Dynamic instruction — resolved per turn so the working-context paragraph
     # reflects the session's ExecEnv and the policy-mode addendum reflects
@@ -435,6 +437,43 @@ def build_root_agent(
                 after_model_callback=after_model_cb,
             )
         )
+
+    # W2 — register user-defined sub-agents loaded from Markdown.
+    # Each custom agent comes with its own AgentConfig (tools + model
+    # gates parsed from the frontmatter). When ``allowed_tools`` is
+    # ``None`` in the frontmatter, the static gate runs with ``None``
+    # too — meaning no allowlist (only the explicit ``disallowed_tools``
+    # apply). This is intentional: built-in defaults exist for the four
+    # known specialists; user-defined agents declare their own surface.
+    if custom_agents is not None:
+        for custom in custom_agents:
+            custom_cfg = custom.config
+            agent_model = (
+                build_model(custom_cfg.model)
+                if custom_cfg.model is not None
+                else root_model
+            )
+            allowed_set: frozenset[str] | None = (
+                frozenset(custom_cfg.allowed_tools)
+                if custom_cfg.allowed_tools is not None
+                else None
+            )
+            disallowed_set = frozenset(custom_cfg.disallowed_tools)
+            sub_agents.append(
+                LlmAgent(
+                    name=custom.name,
+                    description=custom.description_prompt,
+                    model=agent_model,
+                    instruction=_sub_agent_instruction(custom.instruction),
+                    tools=adk_tools,
+                    before_tool_callback=_sub_before_tool(
+                        custom.name, allowed_set, disallowed_set,
+                    ),
+                    after_tool_callback=after_tool_cbs,
+                    before_model_callback=before_model_cb,
+                    after_model_callback=after_model_cb,
+                )
+            )
 
     return LlmAgent(
         name="cowork_root",

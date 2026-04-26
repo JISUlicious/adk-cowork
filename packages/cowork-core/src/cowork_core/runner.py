@@ -13,6 +13,7 @@ uses to get everything it needs:
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -21,6 +22,10 @@ from google.adk.apps.app import App, EventsCompactionConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.runners import Runner
 
+from cowork_core.agents.custom import (
+    CustomAgentLoadError,
+    CustomAgentRegistry,
+)
 from cowork_core.agents.root_agent import build_mcp_toolset, build_root_agent
 from cowork_core.audit import (
     AuditSink,
@@ -220,6 +225,13 @@ class CoworkRuntime:
     # ``cowork_core.audit_policy``. ``NullAuditSink`` default for
     # contexts that haven't built a real one yet.
     audit_sink: AuditSink = field(default_factory=NullAuditSink)
+    # W2 — user-defined sub-agents loaded from Markdown at boot. Empty
+    # registry by default (light test harnesses pass no custom agents).
+    # Reload paths (``restart_mcp``, ``reload``) pass this back to
+    # ``build_root_agent`` so the custom-agent surface survives.
+    custom_agents: CustomAgentRegistry = field(
+        default_factory=CustomAgentRegistry,
+    )
     session_service: SqliteCoworkSessionService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -902,6 +914,7 @@ class CoworkRuntime:
             skills=self.skills,
             mcp_tool_owner=self.mcp_tool_owner,
             memory=self.memory,
+            custom_agents=self.custom_agents,
         )
         # Keep the existing session_service (and therefore live
         # sessions); just give it a new agent. ADK's Runner accepts
@@ -974,6 +987,7 @@ class CoworkRuntime:
             skills=self.skills,
             mcp_tool_owner=self.mcp_tool_owner,
             memory=self.memory,
+            custom_agents=self.custom_agents,
         )
 
         # Rebuild Runner with fresh App + compaction config (so
@@ -1518,6 +1532,26 @@ def _user_config_dir() -> Path:
     return Path.home() / ".config" / "cowork"
 
 
+def _user_agents_dir() -> Path:
+    """W2 — XDG-style cross-workspace custom-agent directory.
+
+    Mirrors ``_user_config_dir() / "skills"`` for skills. Empty by
+    default; users drop ``<name>.md`` files in here to define
+    personal sub-agents that follow them across workspaces.
+    """
+    return _user_config_dir() / "agents"
+
+
+def _workspace_agents_dir(workspace: Workspace) -> Path:
+    """W2 — workspace-global custom-agent directory.
+
+    Mirrors ``<workspace>/global/skills/`` for skills. Per-workspace
+    house specialists live here (e.g. a workspace's "house style"
+    reviewer).
+    """
+    return workspace.root / "global" / "agents"
+
+
 def _user_skills_dir(workspace: Workspace) -> Path:
     """Where the user-install flow lands skills — the spec-canonical
     ``<workspace>/global/skills/`` directory. Separate from
@@ -1660,6 +1694,28 @@ def build_runtime(
     skills.scan(_user_config_dir() / "skills", source="user")
     skills.scan(_user_skills_dir(workspace), source="user")
 
+    # W2 — custom sub-agents loaded from Markdown. User scope first,
+    # workspace-global second so a workspace can override a personal
+    # default. Malformed agent files are logged and skipped — a single
+    # bad file shouldn't prevent boot.
+    custom_agents = CustomAgentRegistry()
+    for scan_root, source in (
+        (_user_agents_dir(), "user"),
+        (_workspace_agents_dir(workspace), "global"),
+    ):
+        try:
+            custom_agents.scan(scan_root, source=source)
+        except CustomAgentLoadError as exc:
+            logging.getLogger("cowork.agents").warning(
+                "skipping custom-agents scan at %s — %s",
+                scan_root, exc,
+                extra={
+                    "event": "custom_agents_scan_failed",
+                    "path": str(scan_root),
+                    "error": str(exc),
+                },
+            )
+
     tool_registry = ToolRegistry()
     register_fs_tools(tool_registry)
     register_shell_tools(tool_registry)
@@ -1727,6 +1783,7 @@ def build_runtime(
         skills=skills,
         mcp_tool_owner=mcp_tool_owner,
         memory=memory,
+        custom_agents=custom_agents,
     )
 
     global_dir = workspace.root / "global"
@@ -1778,6 +1835,7 @@ def build_runtime(
         config_path=config_path,
         workspace_settings_store=workspace_settings_store,
         audit_sink=audit_sink,
+        custom_agents=custom_agents,
     )
 
 

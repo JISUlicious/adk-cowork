@@ -276,6 +276,46 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Custom sub-agents from Markdown — Slice W2 (2026-04-26)
+
+Borrowing the `.claude/agents/<name>.md` pattern from Claude Code:
+users define personal specialists in YAML-frontmatter Markdown files;
+the runtime scans two roots at boot and registers each as an
+`LlmAgent` sub-agent of the cowork root.
+
+**Layered scan**: `~/.config/cowork/agents/*.md` (user, follows the
+user across workspaces) → `<workspace>/global/agents/*.md` (workspace
+scope, shadows user on name collision). Mirrors how skills already
+load. Project-per-workdir scope is deferred — user + workspace covers
+the office-work cases (personal style guide vs workspace house style).
+
+**Frontmatter**: required `name` (must be a valid Python identifier;
+ADK's `LlmAgent` requirement) + `description`. Optional
+`allowed_tools` / `disallowed_tools` / `model` map directly into
+W1's `AgentConfig`. Markdown body = system prompt.
+
+**Reserved names**: `researcher`, `writer`, `analyst`, `reviewer`,
+`cowork_root`. A custom agent that tries to claim one is rejected at
+parse time so the routing surface stays unambiguous.
+
+**Defence-in-depth** (mirrors skill loader): control characters in
+`name` / `description` are rejected so a malicious file can't smuggle
+injected directives into the root prompt's sub-agent catalog.
+
+**Reload paths**: `restart_mcp` + `runtime.reload` thread
+`self.custom_agents` back through `build_root_agent`, so the custom
+surface survives without re-scanning disk.
+
+- add `cowork_core/agents/custom.py` — `CustomAgent` dataclass, `CustomAgentRegistry`, `CustomAgentLoadError`, `parse_agent_md`. Frontmatter validated via Pydantic for the `model` block; tool-list fields validated by hand for clearer error pointers; control-char defence + reserved-name + identifier-validity check
+- update `cowork_core/agents/root_agent.py:build_root_agent` — accepts `custom_agents: CustomAgentRegistry | None`; registers each custom agent in the loop after the four built-ins, sharing the same `_sub_before_tool` chain (W1 static gate, runtime allowlist, permission, audit)
+- update `cowork_core/runner.py` — `_user_agents_dir()` (`~/.config/cowork/agents/`) + `_workspace_agents_dir(ws)` (`<workspace>/global/agents/`) helpers; `build_runtime` populates a `CustomAgentRegistry` and passes it into `build_root_agent`; `CoworkRuntime.custom_agents` field threaded through `restart_mcp` and `runtime.reload`; malformed agent files logged via `cowork.agents` and skipped
+- update `cowork_server/api_models.py` — `CustomAgentInfo(name, description, source, path)` model; `HealthResponse.custom_agents: list[CustomAgentInfo]`
+- update `cowork_server/app.py` — `/v1/health` includes the `custom_agents` list; full frontmatter (tools / model) intentionally NOT exposed
+- add `tests/test_custom_agents.py` — 24 new tests: parser round-trip + model-override block; rejection paths (no fence, no closing fence, missing name, missing description, empty body, reserved name, non-identifier, control char in description, malformed allowed_tools, malformed model); registry layered scan with workspace shadowing user; build_root_agent wires custom agent alongside builtins, static gate from frontmatter blocks fs_write + shell_run, model override puts the custom agent on a different endpoint, description appears on the LlmAgent for routing; build_runtime end-to-end picks up workspace-global agents via monkeypatched `_user_agents_dir`
+- update `ARCHITECTURE.md` — new "Custom sub-agents from Markdown (Slice W2)" subsection under §10
+- update `README.md` — feature row for W2
+- 425 total tests green (was 401, +24)
+
 ### Hard tool gates + per-agent model override — Slice W1 (2026-04-26)
 
 Borrowing from Claude Code's built-in agent design (each agent declares

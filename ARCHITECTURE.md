@@ -547,6 +547,59 @@ runs after. To pass, a tool must satisfy BOTH gates. The user can
 *narrow* the surface from Settings (E.E1) but cannot *widen* it past
 the static gate (W1).
 
+### Custom sub-agents from Markdown (Slice W2)
+
+Borrowing Claude Code's `.claude/agents/<name>.md` pattern, Cowork
+supports user-defined sub-agents loaded from layered scan roots:
+
+- `~/.config/cowork/agents/*.md` — XDG-style cross-workspace personal
+  specialists (mirrors `_user_config_dir() / "skills"` for skills).
+- `<workspace>/global/agents/*.md` — workspace-scoped specialists
+  (mirrors `<workspace>/global/skills/`). Workspace shadows user on
+  name collision.
+
+**Format** (mirrors Claude Code, with Cowork field names):
+
+```markdown
+---
+name: legal_reviewer
+description: Reviews contracts for compliance issues.
+allowed_tools: [fs_read, search_web]
+disallowed_tools: [shell_run]
+model:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key: env:OPENAI_API_KEY
+---
+
+You are the Legal Reviewer.
+…
+```
+
+The frontmatter parses into `AgentConfig` (W1's per-agent gate +
+model override); the Markdown body becomes the system prompt the
+agent runs under (wrapped with the same env-specific working-context
+paragraph the built-in sub-agents use).
+
+**Reserved names**: `researcher`, `writer`, `analyst`, `reviewer`,
+`cowork_root` are rejected at parse time so the routing surface is
+unambiguous. Names must be valid Python identifiers (ADK's
+`LlmAgent` requirement).
+
+**Wiring**: `build_runtime` populates a `CustomAgentRegistry` at
+boot and threads it into `build_root_agent`, which appends each
+custom agent to `LlmAgent.sub_agents` with the same callback chain
+as the built-ins (W1 static gate first, then runtime allowlist,
+then permission, then audit). Reload paths (`restart_mcp`,
+`runtime.reload`) pass `self.custom_agents` back through
+`build_root_agent` so the surface survives.
+
+**UI surface**: `/v1/health.custom_agents` lists each loaded agent
+with `name`, `description`, `source`, and absolute `path`. Full
+frontmatter is intentionally NOT exposed via the API — Settings can
+read the file directly when the user wants to see/edit tools or
+model config.
+
 ### `@`-mentions and auto-route (Tier E.E2)
 
 User types `@researcher gather sources on X`; researcher (not root)

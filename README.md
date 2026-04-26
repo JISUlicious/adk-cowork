@@ -249,6 +249,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Skill marketplace: install via vercel-labs/skills (`npx skills add <source>`) + skills.sh discovery | Core / Server / Settings | wired | V3 |
 | Mitigations: TOML comment preservation (tomlkit) + per-section OCC (`If-Match`) + JSON structured logging | Core / Server | wired | V4 |
 | Hard tool gates per sub-agent (config-time allow/deny) + per-agent model override | Core | wired | W1 |
+| Custom sub-agents from Markdown (`~/.config/cowork/agents/*.md` + `<workspace>/global/agents/*.md`) | Core / Server | wired | W2 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

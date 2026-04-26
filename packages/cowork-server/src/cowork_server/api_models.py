@@ -163,6 +163,15 @@ class RestartMcpResult(BaseModel):
     servers: list[MCPServerStatusInfo]
 
 
+class CustomAgentInfo(BaseModel):
+    """W2 — user-defined sub-agent surfaced via /v1/health.custom_agents."""
+
+    name: str
+    description: str
+    source: str  # "user" | "global"
+    path: str
+
+
 class HealthResponse(BaseModel):
     status: str
     backend: str
@@ -195,6 +204,11 @@ class HealthResponse(BaseModel):
     # "operator is someone else (only they can edit)" so the notice
     # text is right.
     operator_configured: bool = False
+    # W2 — user-defined sub-agents loaded from Markdown at boot.
+    # Empty list when none found. The UI lists these in Settings →
+    # Agents alongside the four built-ins; full frontmatter (tools /
+    # model) is not surfaced here, only the routing-relevant fields.
+    custom_agents: list[CustomAgentInfo] = Field(default_factory=list)
 
 
 # ── Tag: projects ──────────────────────────────────────────────────
@@ -653,7 +667,8 @@ class MemoryPageContent(BaseModel):
 
 __all__ = [
     # health + skills + mcp
-    "CompactionInfo", "HealthResponse", "MCPServerStatusInfo", "SkillInfo",
+    "CompactionInfo", "CustomAgentInfo", "HealthResponse",
+    "MCPServerStatusInfo", "SkillInfo",
     "InstallSkillResult", "ValidateSkillResult", "DeleteSkillResult",
     "McpServerInfo", "McpServerRecord", "McpServersListResponse",
     "AddMcpServerRequest", "AddMcpServerResponse", "DeleteMcpServerResult",

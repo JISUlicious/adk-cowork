@@ -344,6 +344,22 @@ def create_app(
             # "no operator configured" and "operator is someone else".
             "is_operator": is_operator(cfg, user),
             "operator_configured": bool(cfg.auth.operator),
+            # W2 — user-defined sub-agents discovered at boot. Empty
+            # list when no .md files exist under
+            # ``~/.config/cowork/agents/`` or
+            # ``<workspace>/global/agents/``. Surfaces the source so
+            # the UI can show "personal" vs "this workspace"; full
+            # frontmatter (tools/model) is intentionally NOT exposed
+            # here — Settings can read the file directly if needed.
+            "custom_agents": [
+                {
+                    "name": ca.name,
+                    "description": ca.description,
+                    "source": ca.source,
+                    "path": str(ca.path),
+                }
+                for ca in runtime.custom_agents
+            ],
         }
 
     # ── Policy (per-session, falls back to server default) ─────────────
