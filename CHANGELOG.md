@@ -276,6 +276,51 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Per-agent tool surface pruning (role-flow principle) — Slice W4 (2026-04-27)
+
+W1 wired each sub-agent's static gate to a `*_DEFAULT_ALLOWED_TOOLS`
+tuple, but those tuples were copied from each module's prior surface
+and never audited against the role. After W3 added explorer / planner
+/ verifier, three contradictions were visible: researcher had
+`python_exec_run` (Turing-complete escape on a "read-only" role),
+writer had `http_fetch` (researcher's lane) plus `python_exec_run`
+(only used for binary office formats — analyst's lane), analyst had
+`http_fetch` + `fs_promote` (researcher / writer flows).
+
+W4 prunes 8 tool entries across 3 agents using a **role-flow
+principle**: gathering → producing → checking, with `python_exec_run`
+held only by the agents whose role can't avoid it. Whitelist with
+role-specific surfaces is preferred over Claude Code's denylist
+pattern — Cowork's surface contains `python_exec_run` and a denylist
+that excludes `fs_write` but leaves `python_exec` is security
+theatre.
+
+Net surfaces post-W4:
+
+| Agent | Tools | Δ |
+|---|---|---|
+| researcher | 10 (was 12) | drop `python_exec_run`, `memory_log` |
+| writer | 13 (was 16) | drop `python_exec_run`, `http_fetch`, `memory_log` |
+| analyst | 11 (was 14) | drop `http_fetch`, `fs_promote`, `memory_log` |
+| reviewer | 8 (unchanged) | already minimal |
+| explorer | 6 (unchanged) | already minimal |
+| planner | 8 (unchanged) | already minimal |
+| verifier | 9 (unchanged) | already minimal |
+
+Workflow shifts as a consequence:
+- PDF / docx / xlsx data extraction: researcher → analyst (the latter has the python tools).
+- Binary office format generation (.docx / .xlsx / .pdf): writer drafts content as Markdown → analyst converts via python-docx / openpyxl.
+- Publication: analyst saves to scratch/ → writer or root promotes.
+
+- add `cowork_core/agents/_tool_groups.py` — shared tuples (`READ_ONLY_FS`, `WEB_LOOKUP`, `WEB_FULL`, `MEMORY_PRODUCTIVE`, `MEMORY_AUDIT`). Each per-agent module composes its allowlist from these so the role-flow principle is grep-visible (e.g., `WEB_FULL` is referenced exactly once — by the researcher)
+- update `cowork_core/agents/researcher.py` — drop `python_exec_run`, `memory_log`; instruction text loses the "Use `python_exec_run` for data extraction" line and gains a "hand off to the Analyst for binary-format parsing" line
+- update `cowork_core/agents/writer.py` — drop `python_exec_run`, `http_fetch`, `memory_log`; instruction reframes role as "create and edit text-based documents" with a "for binary office formats hand off to the Analyst" line
+- update `cowork_core/agents/analyst.py` — drop `http_fetch`, `fs_promote`, `memory_log`; instruction extended to mention the analyst now produces binary office formats from writer-authored Markdown drafts
+- update `tests/test_agent_gates.py:TestSubAgentDefaults` — `test_researcher_default_is_read_only` extended (now asserts `python_exec_run` not in allowed); `test_writer_default_excludes_shell_and_python_exec` (renamed) covers all three new drops; new `test_analyst_default_excludes_publication_and_audit` asserts the analyst-side drops
+- update `ARCHITECTURE.md` — new "Per-agent tool surface — role-flow principle (Slice W4)" subsection
+- update `README.md` — feature row for W4
+- 443 total tests green (was 442, +1 new analyst-surface assertion)
+
 ### Built-in specialists: Explorer + Planner + Verifier — Slice W3 (2026-04-26)
 
 Three new built-in sub-agents on top of W1+W2's primitives, borrowed

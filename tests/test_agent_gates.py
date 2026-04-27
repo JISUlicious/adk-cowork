@@ -105,15 +105,31 @@ class TestSubAgentDefaults:
         }
 
     def test_researcher_default_is_read_only(self) -> None:
+        """W4 — researcher is the gathering role: read + search/fetch +
+        memory only. ``python_exec_run`` was dropped (it ran at
+        ``cwd=agent_cwd()`` and could write anywhere; a "read-only"
+        agent with that surface was a contradiction). PDF / docx /
+        xlsx parsing now routes to analyst."""
         allowed, _ = SUB_AGENT_DEFAULTS["researcher"]
-        assert "fs_write" not in allowed
-        assert "fs_edit" not in allowed
-        assert "fs_promote" not in allowed
-        assert "shell_run" not in allowed
-        assert "email_send" not in allowed
-        # Read-only fs is in.
+        # No mutation, no execution.
+        for forbidden in (
+            "fs_write", "fs_edit", "fs_promote",
+            "shell_run", "python_exec_run",
+            "email_send", "email_draft",
+        ):
+            assert forbidden not in allowed, (
+                f"{forbidden!r} leaked into researcher's read-only default"
+            )
+        # The gathering surface IS in.
         assert "fs_read" in allowed
         assert "search_web" in allowed
+        assert "http_fetch" in allowed  # researcher is the only role
+                                        # that does raw page fetch
+        # Memory: write / remember only — no log (audit is reviewer
+        # / verifier territory).
+        assert "memory_write" in allowed
+        assert "memory_remember" in allowed
+        assert "memory_log" not in allowed
 
     def test_reviewer_default_is_strictest(self) -> None:
         allowed, _ = SUB_AGENT_DEFAULTS["reviewer"]
@@ -127,12 +143,56 @@ class TestSubAgentDefaults:
                 f"{forbidden!r} leaked into reviewer's read-only default"
             )
 
-    def test_writer_default_excludes_shell(self) -> None:
+    def test_writer_default_excludes_shell_and_python_exec(self) -> None:
+        """W4 — writer is a text-content producer. ``python_exec_run``
+        was dropped because the only thing it bought was binary office
+        formats (.docx / .xlsx / .pdf), which are analyst's lane. Plain
+        ``fs_write`` covers .md / .txt / .html / .csv / .eml / .json /
+        .xml. Writer also doesn't do raw page fetch (researcher's
+        lane) and doesn't keep an audit trail (reviewer / verifier)."""
         allowed, _ = SUB_AGENT_DEFAULTS["writer"]
-        assert "shell_run" not in allowed
-        # But mutation is allowed for the writer.
+        for forbidden in (
+            "shell_run",
+            "python_exec_run",  # W4 drop — text formats only
+            "http_fetch",       # W4 drop — researcher's lane
+            "memory_log",       # W4 drop — audit isn't writer's role
+            "email_send",
+        ):
+            assert forbidden not in allowed, (
+                f"{forbidden!r} leaked into writer's text-only default"
+            )
+        # Mutation IS allowed for the writer.
         assert "fs_write" in allowed
         assert "fs_edit" in allowed
+        assert "fs_promote" in allowed
+        # And single-fact lookups stay (mid-draft fact-check).
+        assert "search_web" in allowed
+        # Memory: write / remember only.
+        assert "memory_write" in allowed
+        assert "memory_remember" in allowed
+
+    def test_analyst_default_excludes_publication_and_audit(self) -> None:
+        """W4 — analyst is the compute role and the binary-format
+        producer. Dropped ``fs_promote`` (publication is a writer-flow
+        step), ``http_fetch`` (raw fetch is researcher's lane), and
+        ``memory_log`` (audit is verifier's lane)."""
+        allowed, _ = SUB_AGENT_DEFAULTS["analyst"]
+        for forbidden in (
+            "shell_run",
+            "fs_promote",       # W4 drop — writer/root promotes
+            "http_fetch",       # W4 drop — researcher fetches
+            "memory_log",       # W4 drop — verifier audits
+            "email_send", "email_draft",
+        ):
+            assert forbidden not in allowed, (
+                f"{forbidden!r} leaked into analyst's compute default"
+            )
+        # python_exec stays (it's the role's reason to exist).
+        assert "python_exec_run" in allowed
+        # search_web stays (reference value lookups during compute).
+        assert "search_web" in allowed
+        # fs_write stays (analyst saves outputs to scratch).
+        assert "fs_write" in allowed
 
 
 class TestBuildRootAgentWiresGate:

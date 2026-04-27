@@ -547,6 +547,59 @@ runs after. To pass, a tool must satisfy BOTH gates. The user can
 *narrow* the surface from Settings (E.E1) but cannot *widen* it past
 the static gate (W1).
 
+### Per-agent tool surface — role-flow principle (Slice W4)
+
+W1 wired each sub-agent to its own `*_DEFAULT_ALLOWED_TOOLS` tuple,
+but those tuples were copied from each module's pre-existing list
+and never audited against the role. W4 audits and prunes:
+
+```
+researcher ──→ writer / analyst ──→ reviewer / verifier
+explorer ──→ (anyone)
+planner ──→ (writes plan; work mode executes)
+```
+
+- **Gathering** (researcher, explorer): read + search/fetch
+- **Producing** (writer, analyst): read + mutate + python_exec where
+  unavoidable
+- **Checking** (reviewer, verifier): read + python_exec (verifier
+  only) + search (fact-check)
+- **Planning** (planner): read + restricted `fs_write` to
+  `scratch/plan.md`
+
+Three drops capture the principle:
+
+1. **Researcher loses `python_exec_run`** — `python_exec` runs at
+   `cwd=agent_cwd()` and the snippet can `open(path, "w")` anywhere
+   in-tree. A "read-only" agent with that surface was a
+   contradiction. PDF / docx / xlsx parsing routes to analyst.
+2. **Writer loses `python_exec_run` + `http_fetch`** — text formats
+   (.md / .txt / .html / .csv / .eml / .json / .xml) are reachable
+   via plain `fs_write`. The only thing `python_exec_run` bought
+   the writer was binary office formats, which are analyst's lane
+   already (analyst owns openpyxl / python-docx). Raw page fetch is
+   researcher's lane. Writer becomes a pure text-content producer.
+3. **Analyst loses `http_fetch` + `fs_promote`** — analyst computes
+   from data already in hand (researcher fetches), and publication
+   is a writer-flow step (analyst saves to scratch, writer or root
+   promotes). `python_exec_run` and `search_web` stay.
+
+Memory tools follow productivity:
+- `memory_read` — universal
+- `memory_write` / `memory_remember` — productive long-form
+  (researcher, writer, analyst)
+- `memory_log` — audit-style (reviewer, verifier)
+
+The principle is grep-visible via shared tuples in
+`agents/_tool_groups.py`: `READ_ONLY_FS`, `WEB_LOOKUP`, `WEB_FULL`,
+`MEMORY_PRODUCTIVE`, `MEMORY_AUDIT`. Searching for `WEB_FULL` finds
+the one agent (researcher) whose role consumes untrusted web
+content; searching for `MEMORY_AUDIT` finds the audit roles.
+
+W4 is *not* a security overhaul — W1's gate already blocks anything
+outside the listed surface. It's a tightening of *what's listed* so
+the surface itself follows the role-flow principle.
+
 ### Built-in specialists (Slice W3)
 
 W3 adds three new built-in sub-agents on top of W1+W2's primitives.
