@@ -210,6 +210,11 @@ class AgentConfig(BaseModel):
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] = Field(default_factory=list)
     model: ModelConfig | None = None
+    # W5 — per-agent ``shell_run`` allowlist. ``None`` = use the
+    # per-agent built-in default (defined per agent module); explicit
+    # list (incl. ``[]``) replaces the default wholesale. Empty list
+    # means "every shell_run call needs user confirmation."
+    shell_allowlist: list[str] | None = None
 
 
 class StorageConfig(BaseModel):

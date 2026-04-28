@@ -252,6 +252,7 @@ entries were intentionally removed (dupes or cosmetic variants);
 | Custom sub-agents from Markdown (`~/.config/cowork/agents/*.md` + `<workspace>/global/agents/*.md`) | Core / Server | wired | W2 |
 | Built-in sub-agents: explorer (read-only navigator) + planner (Plan-mode plan author) + verifier (adversarial probes) | Core | wired | W3 |
 | Per-agent tool surface pruning (role-flow principle) — researcher loses python_exec, writer becomes text-only producer | Core | wired | W4 |
+| Per-agent `shell_run` allowlist + global deny rules + user-confirm flow; analyst gets `pandoc/ffmpeg/libreoffice/…`, verifier gets read-only inspection | Core | wired | W5 |
 | Settings → Agents enable / disable | Settings | culled | deferred (Tier F) |
 | Settings → Per-agent tool allowlist | Settings | wired | E1 |
 | Settings → Approvals policy | Settings | wired | V6 |

@@ -21,9 +21,25 @@ from __future__ import annotations
 VERIFIER_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "fs_read", "fs_glob", "fs_list", "fs_stat",
     "python_exec_run",
+    "shell_run",      # W5 — read-only probes (git status, diff, file, …)
     "search_web",
     "load_skill",
     "memory_read", "memory_log",
+)
+
+# W5 — verifier's default shell allowlist. Strictly read-only inspection
+# programs. Anything outside this set (incl. anything that mutates
+# state) needs user confirmation per call. The deny list still applies
+# globally.
+VERIFIER_DEFAULT_SHELL_ALLOWLIST: tuple[str, ...] = (
+    # VCS introspection
+    "git",
+    # File reading / inspection
+    "ls", "cat", "head", "tail", "wc", "file", "stat",
+    # Diffing / comparison
+    "diff", "cmp",
+    # Format probes (read-only checks against produced artifacts)
+    "python", "python3",
 )
 
 VERIFIER_INSTRUCTION = """\
@@ -39,6 +55,9 @@ Capabilities:
   - Open `.docx` via python-docx and confirm structure.
   - Open `.xlsx` via openpyxl and recompute formulas / check ranges.
   - Render markdown / parse JSON / validate CSV row counts + schemas.
+- Use `shell_run` for read-only inspection probes only — `git status`,
+  `git diff`, `cat`, `head`, `wc`, `file`, `diff`. Do NOT modify
+  files via shell; that breaks the verification contract.
 - Use `search_web` to fact-check claims.
 
 Guidelines:

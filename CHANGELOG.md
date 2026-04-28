@@ -276,6 +276,76 @@ Slice VI — per-session MCP server gating (this commit):
 - update README.md — new feature row for Slice VI
 - update ARCHITECTURE.md — extend MCP paragraph with tool-owner discovery + disable-callback wiring
 
+### Shell access — per-agent allowlist + deny rules + confirm flow — Slice W5 (2026-04-28)
+
+After W4, only the analyst (productive) and verifier (probing) held
+`python_exec_run`. W5 generalises shell access so analyst can call
+CLI tools (pandoc / ffmpeg / libreoffice) directly instead of
+wrapping them in Python — a clarity + audit win without expanding
+the agent's effective capability (Python could already shell out via
+`subprocess.run`).
+
+Borrowing the Bash-tool composition pattern from Claude Code, but
+adapting to Cowork's constitutional argv-only contract (Constitution
+§3.5 — no cross-platform shell strings; pipelines route through
+`python_exec_run`):
+
+**Three-layer gate** in each sub-agent's `before_tool_callback`:
+1. W1 static gate (does the agent have `shell_run` at all)
+2. W5 shell allowlist gate — hardcoded global deny + per-agent
+   allowlist + approval-token consumption
+3. W1 runtime allowlist + permission callback + audit hook
+
+**Hardcoded global deny rules** (`tools/shell/deny.py:check_shell_deny`)
+block catastrophic commands regardless of allowlist or user approval:
+`sudo` / `su` / `doas` / `pkexec`, `passwd` / `chpasswd`, partition
+tools (`fdisk`/`gdisk`/`parted`/`mkfs.*`/`wipefs`), system lifecycle
+(`shutdown`/`reboot`/`halt`/`systemctl`/`service`), recursive `rm`
+against system paths (`/`, `~`, `$HOME`, `/etc`, `/usr`, `/var`,
+`/Users`, `/Applications`, …), `dd if=/dev/` or `dd of=/dev/`, and
+`chmod`/`chown` against system paths. Office work doesn't need any
+of these; allowing them once a user clicks "approve" too quickly
+would be hard to recover from. The deny rules also run defensively
+inside `shell_run`'s body so a future callback-ordering bug can't
+bypass them.
+
+**Per-agent built-in defaults**:
+- `analyst` allowed: `pandoc`, `wkhtmltopdf`, `magick`/`convert`,
+  `ffmpeg`/`ffprobe`, `libreoffice`, `git`, `python`/`python3` — the
+  binary-format CLI tools the role legitimately invokes.
+- `verifier` allowed: `git`, `ls`, `cat`, `head`, `tail`, `wc`,
+  `file`, `stat`, `diff`, `cmp`, `python`/`python3` — read-only
+  inspection probes only.
+- Other sub-agents have no `shell_run` on their W1 surface; the
+  static gate blocks the call before the shell gate fires.
+- Root keeps `cfg.policy.shell_allowlist` (historical global
+  default) since it has the unrestricted W1 surface.
+
+**Config override**: `cfg.agents.<name>.shell_allowlist: list[str] |
+None`. None = per-agent default; explicit list replaces it (incl.
+`[]` to force confirm on every call). Mirrors W1's
+`allowed_tools` / `model` override shape.
+
+**`description` parameter** on `shell_run` — agent supplies a one-line
+human-readable summary surfaced in the confirm prompt for
+non-allowlisted programs ("Convert HTML to PDF" beats raw argv).
+
+- add `cowork_core/tools/shell/deny.py` — `check_shell_deny(argv)` returning a human-readable reason string when argv hits a global deny rule. Total + side-effect-free; reused by both the gate and the tool body
+- update `cowork_core/tools/shell/run.py` — adds `description` param (consumed by gate, not body); calls `check_shell_deny` defensively. Removed the inline allowlist check (moved to the gate). Constitution §3.5 argv-only contract preserved
+- update `cowork_core/config.py:AgentConfig` — adds `shell_allowlist: list[str] | None = None`. Pydantic validator unchanged from W1
+- add `cowork_core/policy/permissions.py:make_shell_allowlist_gate(agent_name, allowlist)` — closure pattern matching `make_static_agent_gate` / `make_allowlist_callback`. Mounted second in the chain (after W1 static gate, before runtime allowlist). Consumes approval tokens via the existing `_consume_approval`
+- update `cowork_core/agents/analyst.py` — adds `shell_run` to W4 allowed_tools; defines `ANALYST_DEFAULT_SHELL_ALLOWLIST`; instruction extended to mention CLI tool use + the `description` param convention
+- update `cowork_core/agents/verifier.py` — adds `shell_run` to allowed_tools; defines `VERIFIER_DEFAULT_SHELL_ALLOWLIST` (read-only probes); instruction warns "Do NOT modify files via shell — that breaks the verification contract"
+- update `cowork_core/agents/root_agent.py` — `SUB_AGENT_SHELL_ALLOWLISTS` map; `_resolve_agent` returns the resolved shell allowlist; sub-agent `before_tool_callback` chain extended; root agent's chain also gets a shell gate using `cfg.policy.shell_allowlist`; W2 custom-agent loop carries the per-agent allowlist through
+- update `tests/test_shell_run.py` — replaces the obsolete inline-confirmation test with a deny-list defence-in-depth assertion (`shell_run(["sudo", "ls"])` returns the deny error)
+- update `tests/test_agent_gates.py:test_analyst_default_excludes_publication_and_audit` — analyst now has `shell_run`; assertion adjusted
+- update `tests/test_w3_agents.py:TestVerifierSurface` — verifier now has `shell_run`; mutation/email exclusions still hold
+- add `tests/test_shell_deny.py` — 35 tests across the deny rules: always-deny programs (sudo/mkfs/etc., parametrized over 14 names), absolute-path equivalence, recursive-rm against `/` / `~` / `/etc` / `/usr/local/bin`, recursive-flag variants (`-r`/`-R`/`-rf`/`-Rf`/`-fr`/`--recursive`/`-rfv`), rm without recursive on system paths allowed, project-local `rm -rf scratch/old` allowed, `dd if=/dev/` blocked, `dd if=in.bin of=out.bin` allowed, `chmod` / `chown` on system paths blocked, edge cases (empty argv, common pandoc/git/ls calls)
+- add `tests/test_shell_gate.py` — 21 tests for the gate: pass-through for non-shell tools, allowlisted programs, basename normalisation for absolute paths, non-allowlisted returns confirmation_required, agent-supplied description surfaces in summary, approval token consumption (consumed once), deny rules win over allowlist, deny rules win over approval token (consumption skipped on deny), built-in default shape (analyst includes binary-doc tools, verifier excludes mutation), `SUB_AGENT_SHELL_ALLOWLISTS` only contains analyst+verifier, build_root_agent wiring (analyst gate passes pandoc, prompts for unknown program, cfg override narrows surface)
+- update `ARCHITECTURE.md` — new "Shell access — per-agent allowlist + deny rules + confirm flow (Slice W5)" subsection
+- update `README.md` — feature row for W5
+- 499 total tests green (was 443, +56)
+
 ### Per-agent tool surface pruning (role-flow principle) — Slice W4 (2026-04-27)
 
 W1 wired each sub-agent's static gate to a `*_DEFAULT_ALLOWED_TOOLS`

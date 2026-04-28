@@ -21,6 +21,7 @@ from google.adk.tools.base_tool import BaseTool
 from cowork_core.agents.custom import CustomAgent, CustomAgentRegistry
 from cowork_core.agents.analyst import (
     ANALYST_DEFAULT_ALLOWED_TOOLS,
+    ANALYST_DEFAULT_SHELL_ALLOWLIST,
     ANALYST_INSTRUCTION,
 )
 from cowork_core.agents.explorer import (
@@ -41,6 +42,7 @@ from cowork_core.agents.reviewer import (
 )
 from cowork_core.agents.verifier import (
     VERIFIER_DEFAULT_ALLOWED_TOOLS,
+    VERIFIER_DEFAULT_SHELL_ALLOWLIST,
     VERIFIER_INSTRUCTION,
 )
 from cowork_core.agents.writer import (
@@ -55,6 +57,7 @@ from cowork_core.policy.permissions import (
     make_allowlist_callback,
     make_mcp_disable_callback,
     make_permission_callback,
+    make_shell_allowlist_gate,
     make_static_agent_gate,
 )
 from cowork_core.tools.base import (
@@ -154,6 +157,17 @@ SUB_AGENT_DEFAULTS: dict[str, tuple[tuple[str, ...], str]] = {
     "explorer": (EXPLORER_DEFAULT_ALLOWED_TOOLS, EXPLORER_INSTRUCTION),
     "planner": (PLANNER_DEFAULT_ALLOWED_TOOLS, PLANNER_INSTRUCTION),
     "verifier": (VERIFIER_DEFAULT_ALLOWED_TOOLS, VERIFIER_INSTRUCTION),
+}
+
+
+# W5 — per-agent default shell allowlist for sub-agents that have
+# ``shell_run`` on their surface. Agents not in this map (or with an
+# empty tuple) fall back to ``cfg.policy.shell_allowlist``; if the
+# agent doesn't have ``shell_run`` in its ``allowed_tools``, the W1
+# static gate blocks the call before the shell allowlist matters.
+SUB_AGENT_SHELL_ALLOWLISTS: dict[str, tuple[str, ...]] = {
+    "analyst": ANALYST_DEFAULT_SHELL_ALLOWLIST,
+    "verifier": VERIFIER_DEFAULT_SHELL_ALLOWLIST,
 }
 
 
@@ -397,6 +411,7 @@ def build_root_agent(
         Any,  # model (LiteLlm)
         frozenset[str] | None,  # allowed_tools (None = no allowlist)
         frozenset[str],  # disallowed_tools
+        tuple[str, ...],  # shell_allowlist (per-agent, W5)
     ]:
         """Layer cfg.agents[name] over the built-in defaults."""
         agent_cfg: AgentConfig | None = cfg.agents.get(name)
@@ -419,7 +434,17 @@ def build_root_agent(
             if agent_cfg is not None
             else frozenset()
         )
-        return agent_model, allowed, disallowed
+        # W5 — shell allowlist resolution: cfg override > per-agent
+        # default > policy fallback. Only matters when the agent has
+        # ``shell_run`` in its allowed tools; agents without it won't
+        # exercise the shell gate at all.
+        if agent_cfg is not None and agent_cfg.shell_allowlist is not None:
+            shell_allow = tuple(agent_cfg.shell_allowlist)
+        elif name in SUB_AGENT_SHELL_ALLOWLISTS:
+            shell_allow = SUB_AGENT_SHELL_ALLOWLISTS[name]
+        else:
+            shell_allow = tuple(cfg.policy.shell_allowlist)
+        return agent_model, allowed, disallowed, shell_allow
 
     # Policy + audit + model callbacks — applied to every agent (root +
     # sub-agents) so plan-mode enforcement, audit logging, and turn-budget
@@ -446,28 +471,43 @@ def build_root_agent(
     # sub-agent gets its own allowlist closure so the callback can
     # know "which agent am I guarding" without reaching into ADK's
     # private ``InvocationContext``.
-    root_before_tool_cbs = _with_mcp([permission_cb, audit_before])
+    # W5 — root's shell gate uses ``cfg.policy.shell_allowlist`` (the
+    # historical global default). Sub-agents get per-agent allowlists
+    # via ``_resolve_agent`` below.
+    root_shell_allowlist = tuple(cfg.policy.shell_allowlist)
+    root_before_tool_cbs = _with_mcp([
+        make_shell_allowlist_gate("cowork_root", root_shell_allowlist),
+        permission_cb,
+        audit_before,
+    ])
     after_tool_cbs = [audit_after]
 
     def _sub_before_tool(
         name: str,
         allowed: frozenset[str] | None,
         disallowed: frozenset[str],
+        shell_allow: tuple[str, ...],
     ) -> list[Any]:
         # W1 — static gate runs FIRST so config-time allow/deny holds
         # even if an injected message flips the runtime allowlist.
+        # W5 — shell allowlist gate runs after the static gate but
+        # before the runtime allowlist so even a session-state
+        # widening of shell_run can't bypass the per-agent shell
+        # surface.
         return _with_mcp([
             make_static_agent_gate(name, allowed, disallowed),
+            make_shell_allowlist_gate(name, shell_allow),
             make_allowlist_callback(name),
             permission_cb,
             audit_before,
         ])
 
     # Sub-agents share the tool list; per-agent model + allow/disallow
-    # are layered from ``cfg.agents.<name>`` on top of built-in defaults.
+    # + shell allowlist are layered from ``cfg.agents.<name>`` on top
+    # of built-in defaults.
     sub_agents: list[LlmAgent] = []
     for sub_name, (default_allowed, instruction) in SUB_AGENT_DEFAULTS.items():
-        sub_model, allowed_set, disallowed_set = _resolve_agent(
+        sub_model, allowed_set, disallowed_set, shell_allow = _resolve_agent(
             sub_name, default_allowed,
         )
         sub_agents.append(
@@ -477,7 +517,7 @@ def build_root_agent(
                 instruction=_sub_agent_instruction(instruction),
                 tools=adk_tools,
                 before_tool_callback=_sub_before_tool(
-                    sub_name, allowed_set, disallowed_set,
+                    sub_name, allowed_set, disallowed_set, shell_allow,
                 ),
                 after_tool_callback=after_tool_cbs,
                 before_model_callback=before_model_cb,
@@ -506,6 +546,15 @@ def build_root_agent(
                 else None
             )
             disallowed_set = frozenset(custom_cfg.disallowed_tools)
+            # W5 — custom agents inherit the policy-level shell
+            # allowlist unless their frontmatter declares one. Custom
+            # agents that don't list shell_run in allowed_tools never
+            # exercise the gate anyway.
+            custom_shell_allow = (
+                tuple(custom_cfg.shell_allowlist)
+                if custom_cfg.shell_allowlist is not None
+                else tuple(cfg.policy.shell_allowlist)
+            )
             sub_agents.append(
                 LlmAgent(
                     name=custom.name,
@@ -515,6 +564,7 @@ def build_root_agent(
                     tools=adk_tools,
                     before_tool_callback=_sub_before_tool(
                         custom.name, allowed_set, disallowed_set,
+                        custom_shell_allow,
                     ),
                     after_tool_callback=after_tool_cbs,
                     before_model_callback=before_model_cb,

@@ -26,9 +26,27 @@ ANALYST_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     *READ_ONLY_FS,
     "fs_write",
     "python_exec_run",
+    "shell_run",      # W5 — direct CLI access for binary office formats
+                      # (pandoc / wkhtmltopdf / ffmpeg / libreoffice etc.)
     *WEB_LOOKUP,      # search_web only — reference value lookups
     "load_skill",
     *MEMORY_PRODUCTIVE,
+)
+
+# W5 — analyst's default shell allowlist. Programs here run without a
+# user-confirm prompt; everything else routes through approvals. The
+# global deny list still applies (sudo / mkfs / etc.) regardless of
+# what's listed here.
+ANALYST_DEFAULT_SHELL_ALLOWLIST: tuple[str, ...] = (
+    # Document conversion
+    "pandoc",         # md ↔ docx / html / pdf / etc.
+    "libreoffice",    # office formats via headless conversion
+    "wkhtmltopdf",    # html → pdf
+    # Image / media
+    "magick", "convert",  # ImageMagick (imagemagick 7 vs 6)
+    "ffmpeg", "ffprobe",
+    # Common dev / introspection
+    "git", "python", "python3",
 )
 
 ANALYST_INSTRUCTION = """\
@@ -41,7 +59,12 @@ need but cannot produce.
 
 Capabilities:
 - Use `python_exec_run` with pandas, openpyxl, python-docx,
-  matplotlib, and Pillow.
+  matplotlib, and Pillow for in-process compute.
+- Use `shell_run` to invoke CLI tools directly for one-shot
+  conversions: `pandoc -o out.pdf in.md`, `ffmpeg -i in.mp4 out.mp3`,
+  `libreoffice --headless --convert-to pdf in.docx`, etc. Pass a
+  `description` arg ("Convert markdown to PDF") so the user-confirm
+  prompt is readable for non-allowlisted programs.
 - Use `fs_read` to load data files (csv, xlsx, json) and text
   drafts (md) the writer has authored.
 - Use `fs_write` to save results.

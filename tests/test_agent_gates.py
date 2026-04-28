@@ -175,10 +175,14 @@ class TestSubAgentDefaults:
         """W4 — analyst is the compute role and the binary-format
         producer. Dropped ``fs_promote`` (publication is a writer-flow
         step), ``http_fetch`` (raw fetch is researcher's lane), and
-        ``memory_log`` (audit is verifier's lane)."""
+        ``memory_log`` (audit is verifier's lane).
+
+        W5 — analyst now has ``shell_run`` for direct CLI tool
+        invocation (pandoc / wkhtmltopdf / ffmpeg / libreoffice).
+        Per-agent shell allowlist controls which programs run without
+        a confirm prompt; the global deny list applies regardless."""
         allowed, _ = SUB_AGENT_DEFAULTS["analyst"]
         for forbidden in (
-            "shell_run",
             "fs_promote",       # W4 drop — writer/root promotes
             "http_fetch",       # W4 drop — researcher fetches
             "memory_log",       # W4 drop — verifier audits
@@ -189,6 +193,8 @@ class TestSubAgentDefaults:
             )
         # python_exec stays (it's the role's reason to exist).
         assert "python_exec_run" in allowed
+        # W5 — shell_run is on the surface for binary-format CLI tools.
+        assert "shell_run" in allowed
         # search_web stays (reference value lookups during compute).
         assert "search_web" in allowed
         # fs_write stays (analyst saves outputs to scratch).

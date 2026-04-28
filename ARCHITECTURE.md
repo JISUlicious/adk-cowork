@@ -547,6 +547,65 @@ runs after. To pass, a tool must satisfy BOTH gates. The user can
 *narrow* the surface from Settings (E.E1) but cannot *widen* it past
 the static gate (W1).
 
+### Shell access — per-agent allowlist + deny rules + confirm flow (Slice W5)
+
+After W4, only the analyst (productive) and verifier (probing) hold
+`python_exec_run` among the productive roles. W5 generalises shell
+access so analyst can call CLI tools (pandoc / ffmpeg / libreoffice)
+directly instead of wrapping them in Python — a clarity + audit win.
+
+**Tool shape** stays argv-only per Constitution §3.5 (no
+cross-platform shell strings; pipelines route through `python_exec_run`).
+`shell_run` gains an optional `description: str` param the agent
+supplies for human-readable confirm prompts.
+
+**Three-layer gate** mounted in each sub-agent's `before_tool_callback`
+chain (in order):
+
+1. **W1 static gate** — does the agent have `shell_run` on its surface
+   at all? (Today: analyst + verifier only.)
+2. **W5 shell allowlist gate** (`make_shell_allowlist_gate(agent_name,
+   allowlist)`):
+   - Hardcoded global deny via `tools/shell/deny.py:check_shell_deny`
+     (`sudo`, `mkfs.*`, recursive rm against system paths, `dd if=/dev/`,
+     etc.) — blocks even with user approval.
+   - `argv[0]` basename in the per-agent allowlist → pass through, no
+     prompt.
+   - Otherwise → consume one approval token if granted via
+     `POST /v1/sessions/{id}/approvals`, else return
+     `confirmation_required` so the UI can prompt the user with the
+     agent-supplied `description`.
+3. **W1 runtime allowlist** + permission callback + audit hook (existing
+   chain).
+
+**Per-agent built-in defaults** in each agent module:
+
+- `analyst`: `pandoc`, `wkhtmltopdf`, `magick`/`convert`, `ffmpeg`,
+  `ffprobe`, `libreoffice`, `git`, `python`/`python3` — the
+  binary-format CLI tools the role legitimately invokes.
+- `verifier`: `git`, `ls`, `cat`, `head`, `tail`, `wc`, `file`, `stat`,
+  `diff`, `cmp`, `python`/`python3` — read-only inspection probes only.
+- Other sub-agents have no `shell_run` on their surface; the W1 static
+  gate blocks the call before the shell gate fires.
+- Root: uses `cfg.policy.shell_allowlist` (the historical global
+  default) since root has the unrestricted W1 surface.
+
+**Config-time override**: `cfg.agents.<name>.shell_allowlist: list[str]
+| None`. `None` falls back to the per-agent default; explicit list
+(incl. `[]` to force confirm on every call) replaces the default
+wholesale. This is the same shape as W1's `allowed_tools` /
+`disallowed_tools` overrides.
+
+**Defence-in-depth**: the deny check runs in both the gate AND
+`shell_run`'s tool body. A callback-ordering bug or future direct-call
+path can't bypass the deny rules even though the gate is the primary
+enforcement point.
+
+**Out of scope (deferred to W5.1)**: auto-background-after-N-seconds
+for long-running commands (Claude Code's `ASSISTANT_BLOCKING_BUDGET_MS`
+pattern). Today's `shell_run` returns when the process exits or
+times out (capped 600s). The `run_in_background` flag isn't wired yet.
+
 ### Per-agent tool surface — role-flow principle (Slice W4)
 
 W1 wired each sub-agent to its own `*_DEFAULT_ALLOWED_TOOLS` tuple,

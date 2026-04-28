@@ -50,10 +50,14 @@ def test_rejects_empty_argv(tctx: MagicMock) -> None:
     assert "error" in shell_run([], tctx)
 
 
-def test_non_allowlisted_returns_confirmation(tctx: MagicMock) -> None:
-    out = shell_run(["/bin/ls"], tctx)
-    assert out.get("confirmation_required") is True
-    assert "allowlist" in str(out.get("summary", ""))
+def test_blocked_by_global_deny(tctx: MagicMock) -> None:
+    """W5 — the tool body re-checks the global deny list as
+    defence-in-depth, so even if the per-agent gate is bypassed
+    (callback ordering bug), shell_run itself still refuses.
+    Per-agent allowlist + user-confirm is now in the gate, not here."""
+    out = shell_run(["sudo", "ls"], tctx)
+    assert "error" in out
+    assert "deny" in str(out["error"]).lower()
 
 
 def test_runs_python_version(tctx: MagicMock) -> None:

@@ -131,9 +131,11 @@ class TestVerifierSurface:
         assert "python_exec_run" in VERIFIER_DEFAULT_ALLOWED_TOOLS
 
     def test_default_excludes_mutation_and_email(self) -> None:
+        # W5 note: shell_run IS in verifier's surface (read-only probes
+        # like git status / cat / diff) — the per-agent shell allowlist
+        # restricts it; mutation tools below are still excluded.
         for forbidden in (
             "fs_write", "fs_edit", "fs_promote",
-            "shell_run",
             "email_send", "email_draft",
         ):
             assert forbidden not in VERIFIER_DEFAULT_ALLOWED_TOOLS, (
@@ -149,9 +151,12 @@ class TestVerifierSurface:
         assert "pass" in text and "fail" in text
 
     def test_static_gate_blocks_writes_for_verifier(self) -> None:
+        # W5 note: shell_run is on verifier's surface (read-only probes);
+        # the static gate doesn't block it. The shell allowlist gate
+        # below it restricts which programs run without confirm.
         agent = build_root_agent(CoworkConfig(), tools=[])
         verifier = next(a for a in agent.sub_agents if a.name == "verifier")
-        for forbidden in ("fs_write", "fs_edit", "shell_run", "email_send"):
+        for forbidden in ("fs_write", "fs_edit", "email_send"):
             assert _gate_blocks(verifier, forbidden, "verifier"), (
                 f"verifier's static gate did not block {forbidden!r}"
             )

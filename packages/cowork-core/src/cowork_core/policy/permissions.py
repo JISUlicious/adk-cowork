@@ -173,6 +173,84 @@ def make_permission_callback(
     return _check_permission
 
 
+def make_shell_allowlist_gate(
+    agent_name: str,
+    allowlist: tuple[str, ...],
+) -> Any:
+    """W5 — per-agent gate for ``shell_run``.
+
+    Captures the agent's effective shell allowlist at agent-build time
+    (closure pattern, mirrors ``make_static_agent_gate`` and
+    ``make_allowlist_callback``). Other tools pass through; only
+    ``shell_run`` calls are inspected.
+
+    Order of operations:
+    1. Hardcoded global deny via ``check_shell_deny`` — no override.
+    2. ``argv[0]`` basename in ``allowlist`` → pass through, no
+       confirm prompt.
+    3. Otherwise: try to consume one approval token (granted by the
+       UI's ``POST /v1/sessions/{id}/approvals``). If consumed → pass
+       through. If not → return ``confirmation_required`` so the UI
+       can prompt the user with the agent-supplied ``description``.
+
+    Per-tool-name approval semantics (one token grants the next call
+    of the same tool, regardless of args) are inherited from the
+    existing approvals layer. Argv-hash-keyed approvals are out of
+    scope for W5; the per-agent allowlist already narrows the surface.
+    """
+    from cowork_core.tools.shell.deny import check_shell_deny
+
+    allowed_set = frozenset(allowlist)
+
+    def _check(
+        tool: BaseTool,
+        args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> dict[str, Any] | None:
+        if tool.name != "shell_run":
+            return None
+
+        argv = args.get("argv")
+        if not isinstance(argv, list) or not argv or not all(
+            isinstance(a, str) for a in argv
+        ):
+            # Let shell_run's own input validation produce the error
+            # message — nothing for the gate to do here.
+            return None
+
+        deny_reason = check_shell_deny(argv)
+        if deny_reason is not None:
+            return {
+                "error": (
+                    f"Blocked by global deny rule for agent "
+                    f"{agent_name!r}: {deny_reason}"
+                ),
+            }
+
+        # ``argv[0]`` may be a path (e.g. ``/usr/local/bin/pandoc``);
+        # the allowlist is keyed by program basename so absolute and
+        # bare names match equivalently.
+        program = argv[0].rsplit("/", 1)[-1]
+        if program in allowed_set:
+            return None
+
+        if _consume_approval(tool_context, "shell_run"):
+            return None
+
+        description = args.get("description")
+        if not isinstance(description, str) or not description:
+            description = f"Run `{' '.join(argv)}`"
+        return _confirmation(
+            "shell_run",
+            summary=description,
+            argv=argv,
+            agent=agent_name,
+            allowlist=sorted(allowed_set),
+        )
+
+    return _check
+
+
 def make_static_agent_gate(
     agent_name: str,
     allowed_tools: frozenset[str] | None,
